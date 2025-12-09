@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "project": "Trading Assistant v7.0",
+  "model": {
+    "preferred": "opus-4",
+    "reason": "Complex trading system requiring deep analysis"
+  },
+  "workflow": {
+    "development": {
+      "platform": "macOS",
+      "path": "/Users/jirimerz/Projects/TAv70",
+      "editor": "user's choice"
+    },
+    "deployment": {
+      "method": "manual via deploy.sh",
+      "source": "./src/",
+      "target": "/Volumes/addon_configs/a0d7b954_appdaemon/apps/",
+      "note": "User deploys manually - never auto-deploy"
+    },
+    "production": {
+      "platform": "Home Assistant OS",
+      "device": "Raspberry Pi 4",
+      "appdaemon": "0.17.11"
+    }
+  },
+  "documentation": {
+    "context": "docs/CLAUDE.md",
+    "sprint": "docs/NEXT_SPRINT_CONTEXT.md",
+    "architecture": "docs/README.md"
+  },
+  "guidelines": [
+    "Read docs/CLAUDE.md first for full context",
+    "Use Opus model for complex modifications",
+    "Test locally on macOS, deploy to HA",
+    "Never auto-deploy - user handles deployment",
+    "Keep ERROR logs only for real errors",
+    "Follow existing code patterns"
+  ],
+  "key_files": {
+    "config": "src/apps.yaml",
+    "main": "src/trading_assistant/main.py",
+    "client": "src/trading_assistant/ctrader_client.py",
+    "risk": "src/trading_assistant/risk_manager.py"
+  },
+  "status": {
+    "phase": "Production ready",
+    "last_sprint": "Log cleanup complete",
+    "auto_trading": "Disabled by default (safety)"
+  }
+}

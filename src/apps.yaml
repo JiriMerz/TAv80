@@ -1,0 +1,403 @@
+# =====================
+# apps.yaml - M5 WIDE STOPS FINAL
+# 2025-01-03
+# =====================
+
+trading_assistant:
+  module: trading_assistant.main
+  class: TradingAssistant
+  log_level: INFO
+
+  # === MVP AUTO-TRADING CONFIGURATION ===
+  auto_trading:
+    enabled: true # AUTO-TRADING: Zapnuto ve výchozím stavu
+    per_trade_risk_pct: 0.005 # 0.5% per trade
+    daily_risk_limit_pct: 0.04 # 4% daily limit (to accommodate fixed position sizing)
+    max_concurrent_positions: 3
+    enable_time_based_switching: false # TESTING: Vypnuto pro test DAX tlačítka
+
+  # === POSITION CONFLICT HANDLING STRATEGY ===
+  position_conflicts:
+    strategy: "CLOSE_AND_REVERSE"  # Options: "SAME_DIRECTION_ONLY" | "CLOSE_AND_REVERSE" | "IGNORE_ALL"
+    close_all_on_reverse: true     # Close ALL positions (true) or just conflicting symbol (false)
+    log_closures: true             # Verbose logging of position closures
+    
+    # Additional options for SAME_DIRECTION_ONLY strategy:
+    allow_same_direction_scaling: true   # Allow multiple positions in same direction
+    block_opposite_direction: true      # Block hedge/reverse positions
+    # Note: Per-symbol limit controlled by global max_positions: 3
+
+    # Advanced strategies (for future implementation):
+    close_and_reverse_quality_threshold: 85   # Min quality for reversal
+    close_and_reverse_confidence_threshold: 90 # Min confidence for reversal
+    max_acceptable_loss_for_reversal: -2.0    # Max -2% loss for reversal
+
+  # === ACCOUNT MONITORING CONFIGURATION ===
+  account_monitoring:
+    enabled: true # AKTIVOVÁNO - real data only, no fallbacks!
+
+    # NEW: Event-driven configuration
+    update_on_execution_only: true # Event-driven mode (default: true)
+    fallback_update_interval: 300 # Fallback aktualizace každých 5 minut (300 sekund)
+    legacy_periodic_interval: 30 # Legacy periodické aktualizace (30 sekund) - pouze pokud update_on_execution_only: false
+
+    # DEPRECATED (kept for compatibility)
+    update_interval_seconds: 30 # DEPRECATED - použij legacy_periodic_interval
+    log_changes: true # Logovat změny stavu účtu
+
+    # Trading hours (CET)
+    dax_hours:
+      start: "09:00"
+      end: "15:30"
+    nasdaq_hours:
+      start: "15:30"
+      end: "22:00"
+
+    # Stop loss methods priority (1=highest)
+    stop_loss_method_priority:
+      - "swing_based" # Prefer swing-based when available
+      - "atr_based" # Fallback to ATR-based
+      - "static_wide" # Final fallback to static wide
+
+  # Enhanced ATR-based stop loss parameters
+  atr_sl_multiplier: 2.0 # Optimal SL = 2×ATR
+  atr_min_multiplier: 1.5 # Min SL = 1.5×ATR
+  atr_max_multiplier: 3.0 # Max SL = 3×ATR
+
+  # Intraday TP constraints
+  conservative_rrr_limit: 1.6 # Max 1.6:1 R:R pro intraday realism
+
+  # Swing-based stop loss parameters - DISABLED for fixed SL/TP approach
+  use_swing_stops: false  # CHANGED: Use fixed SL/TP instead
+  swing_min_sl_points: 120.0 # 80% of normal minimum (more flexible)
+  swing_max_sl_points: 450.0 # 150% of normal maximum (more flexible)
+  swing_buffer_points: 20.0 # Default buffer below/above swing levels
+
+  # === cTrader Connection ===
+  ws_uri: !secret ws_uri
+  client_id: !secret client_id
+  client_secret: !secret client_secret
+  access_token: !secret access_token
+  ctid_trader_account_id: !secret ctid_trader_account_id
+  trader_login: !secret trader_login
+
+  # === TIMEFRAME CONFIGURATION ===
+  timeframe: "M5"
+
+  # === Symbols Configuration ===
+  symbols:
+    - name: "US100"  # Process US100 first (it works)
+    - name: "GER40"  # Process GER40 second
+
+  symbol_alias:
+    GER40: "DAX"
+    US100: "NASDAQ"
+
+  symbol_id_overrides:
+    GER40: 203  # Original working symbol ID
+    US100: 208
+
+  # === Test Signal Configuration ===
+  test_signals:
+    default_quality: 75           # Test signal quality (75%)
+    default_confidence: 75        # Test signal confidence (75%)
+    rrr_ratio: 2.0               # Risk:Reward ratio for tests (1:2)
+    dax_sl_multiplier: 0.9       # DAX SL reduction (10% less volatile)
+    nasdaq_sl_multiplier: 1.0    # NASDAQ SL standard
+
+  # === Risk Management ===
+  account_balance: 2000000
+  account_currency: CZK
+
+  # Flexible risk per trade: 0.4-0.6% based on signal quality
+  base_risk_per_trade: 0.005 # 0.5% base (10,000 CZK)
+  min_risk_per_trade: 0.004 # 0.4% minimum (8,000 CZK)
+  max_risk_per_trade: 0.006 # 0.6% maximum (12,000 CZK)
+
+  min_profit_ratio: 0.25 # Min 25% of risk
+  max_risk_total: 0.03 # 3% total
+  max_positions: 3  # Max 3 concurrent positions (sync with auto_trading)
+  daily_loss_limit: 0.05 # 5% daily max
+  max_margin_usage: 0.80 # 80% margin max
+
+  # Position sizing parameters
+  use_wide_stops: true
+  target_position_lots: 12.0 # Target around 12 lots (middle of 8-20 range)
+  min_position_lots: 8.0 # Minimum 8 lots
+  max_position_lots: 20.0 # Maximum 20 lots
+
+  # Advanced SL/TP strategy parameters - SWING TRADING (based on analysis)
+  use_fixed_sl_tp: true
+  base_sl_pips: 4000 # Base SL 4000 pips (40 bodů NASDAQ)
+  fixed_rrr: 1.25 # Risk:Reward ratio 1.25:1 (TP = 5000 pips = 50 bodů)
+  sl_flexibility_percent: 0 # NO flexibility - fixed SL/TP for swing trading
+
+  # Market structure adjustment factors - DISABLED for fixed SL/TP
+  use_market_structure_sl: false # CHANGED: Disable for pure fixed SL/TP
+  pivot_influence_weight: 0.3 # Weight for pivot levels in SL adjustment
+  atr_influence_weight: 0.4 # Weight for ATR in SL adjustment
+  swing_influence_weight: 0.3 # Weight for swing levels in SL adjustment
+
+  # === Symbol Specifications ===
+  symbol_specs:
+    DAX:
+      min_lot: 0.01
+      max_lot: 20.0
+      lot_step: 0.01
+      pip_value_per_lot: 0.24 # CZK per pip per 1.0 lot
+      margin_per_lot: 29062
+      commission_per_lot: 4.20
+      pip_position: 2 # 10^2 = 100 pips per point
+
+      # NEW: SL/TP Band System (replaces static limits)
+      sl_anchor_pips: 4000 # SL anchor point
+      sl_band_pct: 0.25 # ±25% band = 3000-5000 pips
+      tp_rr_target: 2.0 # Default RRR for TP calculation
+      tp_band_pct: 0.25 # ±25% band around TP anchor
+
+      # Legacy static wide stops limits (kept for reference)
+      min_sl_points: 150.0 # 15000 pips minimum
+      max_sl_points: 300.0 # 30000 pips maximum
+      optimal_sl_points: 200.0 # 20000 pips target
+
+      # Swing-based stop loss parameters
+      swing_buffer_points: 15.0 # 1500 pips buffer for DAX
+
+      # ATR-normalized thresholds for adjustments
+      pivot_close_atr: 0.2   # Within 0.2 ATR = penalize SL (close to pivot)
+      pivot_far_atr: 0.8     # Beyond 0.8 ATR = reward SL (far from pivot)
+      round_close_atr: 0.1   # Within 0.1 ATR = penalize SL (close to round number)
+      round_medium_atr: 0.05 # Within 0.05 ATR = major round number penalty
+
+      # Risk management
+      max_spread_pips: 15.0
+      target_position_lots: 12.0 # 8-20 lots range
+
+      # Intraday TP constraints
+      max_intraday_tp_points: 50.0 # Max 50 points TP pro intraday realism
+
+    NASDAQ:
+      min_lot: 0.01
+      max_lot: 20.0
+      lot_step: 0.01
+      pip_value_per_lot: 0.20 # CZK per pip per 1.0 lot
+      margin_per_lot: 24530
+      commission_per_lot: 4.20
+      pip_position: 2 # 10^2 = 100 pips per point
+
+      # NEW: SL/TP Band System (replaces static limits)
+      sl_anchor_pips: 5000 # SL anchor point (higher for NASDAQ volatility)
+      sl_band_pct: 0.25 # ±25% band = 3750-6250 pips
+      tp_rr_target: 2.0 # Default RRR for TP calculation
+      tp_band_pct: 0.25 # ±25% band around TP anchor
+
+      # Legacy static wide stops limits (kept for reference)
+      min_sl_points: 200.0 # 20000 pips minimum
+      max_sl_points: 400.0 # 40000 pips maximum
+      optimal_sl_points: 250.0 # 25000 pips target
+
+      # Swing-based stop loss parameters
+      swing_buffer_points: 20.0 # 2000 pips buffer for NASDAQ
+
+      # ATR-normalized thresholds for adjustments
+      pivot_close_atr: 0.2   # Within 0.2 ATR = penalize SL (close to pivot)
+      pivot_far_atr: 0.8     # Beyond 0.8 ATR = reward SL (far from pivot)
+      round_close_atr: 0.1   # Within 0.1 ATR = penalize SL (close to round number)
+      round_medium_atr: 0.05 # Within 0.05 ATR = major round number penalty
+
+      # Risk management
+      max_spread_pips: 20.0
+      target_position_lots: 10.0 # 8-20 lots range, lower for NASDAQ
+
+      # Intraday TP constraints
+      max_intraday_tp_points: 60.0 # Max 60 points TP pro intraday realism
+
+  # === Risk Adjustments ===
+  risk_adjustments:
+    quality_80_plus: 1.2
+    quality_50_80: 1.0
+    quality_below_50: 0.7
+
+  position_scaling:
+    first: 1.0
+    second: 0.75
+    third: 0.5
+
+  regime_adjustments:
+    TREND: 1.0
+    RANGE: 0.7
+    UNKNOWN: 0.5
+
+  volatility_adjustments:
+    low_atr_threshold: 10.0
+    low_atr_multiplier: 1.1
+    high_atr_threshold: 30.0
+    high_atr_multiplier: 0.8
+
+  # === Timing for M5 ===
+  bar_warmup: 3 # 60 minutes warmup
+  analysis_min_bars: 12 # 120 minutes minimum
+  status_interval_sec: 60
+
+  # History bootstrap
+  use_historical_bootstrap: true
+  history_cache_dir: "./cache"
+  history_bars_count: 300
+  history_max_age_minutes: 60
+
+  # === Sprint 2 Configuration ===
+  microstructure:
+    lookback_days: 20
+    z_score_threshold: 2.0
+    or_duration_minutes: 30
+    # NEW: Signal filtering parameters
+    min_liquidity_score: 0.1 # TESTING: Lowered from 0.3 for signal generation during development
+    vwap_confluence_distance: 0.3 # Max % distance from VWAP for confluence
+    volume_zscore_threshold: 1.5 # Threshold for volume confirmation
+    use_time_filter: true # Enable time-based filtering
+    orb_weight: 1.1 # Weight multiplier for ORB signals
+    # NOVÉ: ORB Enhanced Configuration
+    progressive_or_updates: true  # Enable progressive OR updates during first 30 minutes
+    orb_signal_generation: true   # Enable automatic ORB signal generation
+
+  expectancy:
+    min_samples: 20
+    target_expectancy: 0.5
+    target_profit_factor: 1.5
+
+  # === THREAD PERFORMANCE ===
+  performance:
+    enable_adaptive_dispatch: true      # Enable adaptive dispatch intervals
+    enable_queue_limiting: true         # Enable smart queue size limiting
+    base_dispatch_interval: 0.05        # Base 50ms interval
+    fast_dispatch_interval: 0.02        # Fast 20ms interval for high load
+    slow_dispatch_interval: 0.10        # Slow 100ms interval for low load
+    queue_size_low_threshold: 50        # Switch to slow mode
+    queue_size_high_threshold: 200      # Switch to fast mode
+    max_queue_size: 300                 # REDUCED hard limit (was 500)
+    priority_queue_size: 200            # REDUCED priority threshold (was 400)
+    emergency_queue_size: 800           # EMERGENCY: Clear queue if this reached
+
+
+  # === PULLBACK DETECTION ===
+  pullback:
+    min_trend_strength: 25 # Minimum ADX for pullback detection
+    max_retracement_pct: 0.618 # Max 61.8% fibonacci retracement
+    min_retracement_pct: 0.236 # Min 23.6% fibonacci retracement
+    structure_touch_atr: 0.5 # Distance to structure levels (in ATR)
+    min_structure_age: 5 # Min bars old for structure levels
+    vwap_touch_distance: 0.1 # % distance from VWAP for entry
+    confluence_bonus: 15 # Bonus points for multiple levels
+    momentum_divergence_bonus: 20 # Bonus for momentum divergence
+    lookback_days: 30
+
+  # === Analysis Modules ===
+  regime:
+    adx_period: 14
+    adx_threshold: 25
+    adx_hi: 28
+    adx_lo: 22
+    regression_period: 20
+    regression_r2_threshold: 0.6
+    enable_hurst: false
+
+  pivots:
+    pivot_tolerance_atr: 0.30
+    use_weekly_pivots: false
+
+  swings:
+    atr_multiplier_m1: 0.5
+    atr_multiplier_m5: 0.5  # LOWERED from 1.2 to 0.5 for better swing detection (based on analysis)
+    atr_multiplier_m15: 1.5
+    min_bars_between: 2  # LOWERED from 3 to 2 to detect more swings
+    min_swing_quality: 20  # Lowered from 25 to allow more swing signals
+    atr_period: 14
+    # NEW: Pivot-enhanced swing detection
+    use_pivot_validation: true
+    pivot_confluence_atr: 0.3 # ATR distance for pivot confluence
+    pivot_validation_weight: 1.2 # Quality boost multiplier
+
+  # === Edge Detection ===
+  edges:
+    # Structure detection
+    swing_lookback: 30
+    recent_swing_bars: 10
+    weight_recent_swings: false
+
+    # Wide stops multipliers
+    atr_factor_sl: 0.3
+    atr_factor_tp_min: 1.8
+    atr_factor_tp_standard: 2.0
+    fallback_atr: 20.0
+
+    # Wide stops specific
+    use_dynamic_stops: true
+    min_rrr_for_wide: 1.5
+    target_rrr_wide: 2.0
+
+    # Risk/Reward
+    min_rrr: 1.2  # TESTING: Lowered from 1.8 to 1.2 for initial signal generation (2025-10-08)
+    standard_rrr: 2.0
+    max_rrr: 3.0
+
+    # Quality thresholds
+    min_swing_quality: 25  # TESTING: Lowered from 50 to 25 to match SwingEngine defaults (2025-10-08)
+    min_signal_quality: 60
+    min_confidence: 70
+    default_confidence: 70
+    default_signal_quality: 75
+
+    # Pattern parameters
+    pin_bar_ratio: 0.3
+    engulfing_min_size: 0.9
+    momentum_threshold_atr: 0.8
+
+    # Timing
+    min_bars_between_signals: 6  # PHASE 1: Increased from 3 to 6 (2025-10-08)
+    swing_break_lookback: 10
+
+    # Pivot interference handling
+    pivot_interference_buffer_atr: 0.15  # ATR buffer for SL/TP adjustments around pivots
+    pivot_interference_quality_penalty: -15  # Quality penalty % for signals with pivot interference
+    pivot_interference_min_rrr: 1.5  # Minimum RRR required after pivot adjustments
+
+    # Other
+    tick_size: 0.5
+    require_regime_alignment: true  # PHASE 1: Changed from false to true (2025-10-08)
+    check_spread: true
+    max_spread_multiplier: 2.0
+
+  signal_manager:
+    trigger_zone_atr: 0.2
+    notify_on_new: true
+    notify_on_trigger: true
+    notify_on_expire: false
+    max_history: 100
+    validity_aggressive: 2
+    validity_normal: 4
+    validity_patient: 6
+    validity_limit: 12
+    missed_atr_multiple: 1.5
+
+  # === Quality Trading Hours Configuration ===
+  trading_hours:
+    enabled: true
+    timezone: "Europe/Prague"
+
+    DAX:
+      monday: "09:00-15:30"     # DAX quality hours
+      tuesday: "09:00-15:30"    # DAX quality hours
+      wednesday: "09:00-15:30"  # DAX quality hours
+      thursday: "09:00-15:30"   # DAX quality hours
+      friday: "09:00-15:30"     # DAX quality hours
+      saturday: null            # Weekend - no trading
+      sunday: null              # Weekend - no trading
+
+    NASDAQ:
+      monday: "14:30-22:00"     # NASDAQ quality hours
+      tuesday: "14:30-22:00"    # NASDAQ quality hours
+      wednesday: "14:30-22:00"  # NASDAQ quality hours
+      thursday: "14:30-22:00"   # NASDAQ quality hours
+      friday: "14:30-22:00"     # NASDAQ quality hours
+      saturday: null            # Weekend - no trading
+      sunday: null              # Weekend - no trading
