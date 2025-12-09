@@ -778,37 +778,92 @@ class TradingAssistant(hass.Hass):
 
             current_queue_size = len(self._dispatch_queue)
 
-            # EMERGENCY: Clear queue if critically large
+            # EMERGENCY: Priority-based dropping if critically large (instead of clear all)
             if current_queue_size >= emergency_queue_size:
-                self.log(f"[DISPATCH] EMERGENCY: Queue size {current_queue_size} >= {emergency_queue_size}, clearing all non-execution events")
-                execution_events = [item for item in self._dispatch_queue if item[0] == 'execution']
+                self.log(f"[DISPATCH] EMERGENCY: Queue size {current_queue_size} >= {emergency_queue_size}, applying priority-based dropping")
+                
+                # Separate events by priority
+                execution_events = []
+                account_events = []
+                bar_events = []
+                price_events = []
+                
+                for item in self._dispatch_queue:
+                    item_type = item[0]
+                    if item_type == 'execution':
+                        execution_events.append(item)
+                    elif item_type == 'account':
+                        account_events.append(item)
+                    elif item_type == 'bar':
+                        bar_events.append(item)
+                    else:  # price and others
+                        price_events.append(item)
+                
+                # Keep all execution and account events (critical)
+                # Keep only latest 50% of bar events (sampling)
+                # Drop all price events (lowest priority, already coalesced in processing)
+                bar_keep_count = max(1, len(bar_events) // 2)  # Keep latest 50%
+                bar_events_kept = bar_events[-bar_keep_count:] if bar_events else []
+                
+                # Rebuild queue with priority order
                 self._dispatch_queue.clear()
-                for event in execution_events:
-                    self._dispatch_queue.append(event)
-                self.log(f"[DISPATCH] EMERGENCY: Queue cleared, kept {len(execution_events)} execution events")
+                self._dispatch_queue.extend(execution_events)
+                self._dispatch_queue.extend(account_events)
+                self._dispatch_queue.extend(bar_events_kept)
+                
+                dropped_count = len(price_events) + (len(bar_events) - len(bar_events_kept))
+                self.log(f"[DISPATCH] EMERGENCY: Priority drop - kept {len(execution_events)} execution, "
+                        f"{len(account_events)} account, {len(bar_events_kept)}/{len(bar_events)} bars, "
+                        f"dropped {dropped_count} events (all prices + {len(bar_events) - len(bar_events_kept)} old bars)")
                 current_queue_size = len(self._dispatch_queue)
 
-            # Enhanced queue size limiting
+            # Enhanced queue size limiting with priority-based dropping
             if self._queue_limiting_enabled and current_queue_size >= max_queue_size:
-                # Smart dropping - preserve execution events, drop old price events preferentially
+                # Smart dropping - preserve execution/account events, sample bar events, drop old price events
                 dropped_count = 0
                 original_queue = list(self._dispatch_queue)
-                self._dispatch_queue.clear()
-
-                # Keep execution events and recent bar events
+                
+                # Separate by type
+                execution_events = []
+                account_events = []
+                bar_events = []
+                price_events = []
+                
                 for item in original_queue:
                     item_type = item[0]
                     if item_type == 'execution':
-                        self._dispatch_queue.append(item)  # Always keep executions
+                        execution_events.append(item)
+                    elif item_type == 'account':
+                        account_events.append(item)
                     elif item_type == 'bar':
-                        self._dispatch_queue.append(item)  # Always keep bars
-                    elif item_type == 'price' and len(self._dispatch_queue) < priority_queue_size:
-                        self._dispatch_queue.append(item)  # Keep some recent prices
-                    else:
-                        dropped_count += 1
+                        bar_events.append(item)
+                    else:  # price and others
+                        price_events.append(item)
+                
+                # Rebuild queue with priority: execution > account > bars (sampled) > prices (limited)
+                self._dispatch_queue.clear()
+                self._dispatch_queue.extend(execution_events)  # All execution events
+                self._dispatch_queue.extend(account_events)   # All account events
+                
+                # Keep latest 75% of bar events (sampling to prevent signal loss)
+                bar_keep_count = max(1, int(len(bar_events) * 0.75))
+                bar_events_kept = bar_events[-bar_keep_count:] if bar_events else []
+                self._dispatch_queue.extend(bar_events_kept)
+                
+                # Keep only latest price events if we have space
+                remaining_slots = priority_queue_size - len(self._dispatch_queue)
+                if remaining_slots > 0 and price_events:
+                    price_events_kept = price_events[-remaining_slots:] if len(price_events) > remaining_slots else price_events
+                    self._dispatch_queue.extend(price_events_kept)
+                    dropped_count += len(price_events) - len(price_events_kept)
+                else:
+                    dropped_count += len(price_events)
+                
+                dropped_count += len(bar_events) - len(bar_events_kept)
 
                 if dropped_count > 0:
-                    self.log(f"[DISPATCH] Smart drop: removed {dropped_count} old price events, "
+                    self.log(f"[DISPATCH] Smart drop: removed {dropped_count} old events "
+                           f"({len(price_events)} prices + {len(bar_events) - len(bar_events_kept)} old bars), "
                            f"kept {len(self._dispatch_queue)} priority events (limit: {max_queue_size})")
 
             # Add new callback (execution events skip queue size check)
@@ -1206,14 +1261,69 @@ class TradingAssistant(hass.Hass):
         
         # === KONTROLY PRO GENEROVÁNÍ SIGNÁLŮ ===
         
-        # Kontrola cooldown
-        if not hasattr(self, '_last_signal_time'):
-            self._last_signal_time = {}
+        # Enhanced cooldown check - direction-aware and market-change aware
+        if not hasattr(self, '_last_signal_info'):
+            self._last_signal_info = {}  # {alias: {'time': datetime, 'direction': 'BUY'|'SELL', 'price': float}}
         
         now = datetime.now()
-        last_signal = self._last_signal_time.get(alias)
-        if last_signal and (now - last_signal).seconds < 1800:  # 30 minut
-            return
+        last_signal_info = self._last_signal_info.get(alias)
+        
+        if last_signal_info:
+            last_signal_time = last_signal_info.get('time')
+            last_direction = last_signal_info.get('direction', '')
+            last_price = last_signal_info.get('price', 0)
+            
+            time_since_signal = (now - last_signal_time).seconds if last_signal_time else 0
+            base_cooldown = 1800  # 30 minut base cooldown
+            
+            # Get current price for market change detection
+            current_price = self._get_current_price(alias)
+            
+            # Check if market changed significantly (new swing, pivot break, or large price move)
+            market_changed = False
+            if current_price > 0 and last_price > 0:
+                price_change_pct = abs(current_price - last_price) / last_price if last_price > 0 else 0
+                atr_value = self.current_atr.get(alias, 0)
+                
+                # Significant price move (2x ATR or 1% change)
+                if atr_value > 0:
+                    price_change_atr = abs(current_price - last_price) / atr_value if atr_value > 0 else 0
+                    if price_change_atr >= 2.0 or price_change_pct >= 0.01:
+                        market_changed = True
+                elif price_change_pct >= 0.01:
+                    market_changed = True
+                
+                # Check for new swing (if swing state changed significantly)
+                if swing and swing.get('last_high') and swing.get('last_low'):
+                    # If new swing high/low detected, market structure changed
+                    if last_signal_info.get('last_swing_high') != swing.get('last_high') or \
+                       last_signal_info.get('last_swing_low') != swing.get('last_low'):
+                        market_changed = True
+            
+            # Determine effective cooldown based on direction and market changes
+            if market_changed:
+                # Market changed significantly - reduce cooldown to 10 minutes
+                effective_cooldown = 600  # 10 minutes
+            else:
+                effective_cooldown = base_cooldown
+            
+            # Direction-aware: Allow opposite direction signals sooner (15 minutes)
+            # This allows BUY after SELL or vice versa without full cooldown
+            # (We'll check direction later when we have the signal)
+            
+            if time_since_signal < effective_cooldown:
+                # Still in cooldown - but we'll check direction when signal is generated
+                # For now, just log and continue (direction check happens later in edge detection)
+                if not hasattr(self, '_cooldown_log_throttle'):
+                    self._cooldown_log_throttle = {}
+                
+                last_log = self._cooldown_log_throttle.get(alias, datetime.now() - timedelta(seconds=300))
+                if (now - last_log).seconds > 300:  # Log max once per 5 minutes
+                    self._cooldown_log_throttle[alias] = now
+                    remaining = effective_cooldown - time_since_signal
+                    self.log(f"[COOLDOWN] {alias}: Signal cooldown active ({remaining//60}min remaining, "
+                            f"market_changed={market_changed}, last_direction={last_direction})")
+                # Continue to edge detection - it will check direction and apply cooldown if needed
         
         # Kontrola aktivních tiketů
         active_tickets = self._count_active_tickets(alias)
@@ -1287,6 +1397,33 @@ class TradingAssistant(hass.Hass):
             if signals:
                 sig = signals[0]
                 
+                # Direction-aware cooldown check - allow opposite direction signals sooner
+                signal_direction = sig.signal_type.value if hasattr(sig.signal_type, 'value') else str(sig.signal_type)
+                last_signal_info = self._last_signal_info.get(alias)
+                
+                if last_signal_info:
+                    last_direction = last_signal_info.get('direction', '')
+                    last_signal_time = last_signal_info.get('time')
+                    time_since_signal = (now - last_signal_time).seconds if last_signal_time else 0
+                    
+                    # If opposite direction, use shorter cooldown (15 minutes)
+                    if last_direction and signal_direction != last_direction:
+                        opposite_cooldown = 900  # 15 minutes for opposite direction
+                        if time_since_signal < opposite_cooldown:
+                            remaining = opposite_cooldown - time_since_signal
+                            self.log(f"[COOLDOWN] {alias}: Skipping {signal_direction} signal - "
+                                    f"opposite direction cooldown active ({remaining//60}min remaining, "
+                                    f"last was {last_direction})")
+                            return
+                    else:
+                        # Same direction - use full cooldown (already checked above, but double-check here)
+                        base_cooldown = 1800  # 30 minutes
+                        if time_since_signal < base_cooldown:
+                            remaining = base_cooldown - time_since_signal
+                            self.log(f"[COOLDOWN] {alias}: Skipping {signal_direction} signal - "
+                                    f"same direction cooldown active ({remaining//60}min remaining)")
+                            return
+                
                 # Position sizing with microstructure data
                 position = self.risk_manager.calculate_position_size(
                     symbol=alias,
@@ -1302,7 +1439,16 @@ class TradingAssistant(hass.Hass):
                 if position:
                     # Publikovat tiket
                     self._publish_single_trade_ticket(alias, position, sig)
-                    self._last_signal_time[alias] = now
+                    
+                    # Enhanced signal tracking - store direction, price, and swing state
+                    signal_direction = sig.signal_type.value if hasattr(sig.signal_type, 'value') else str(sig.signal_type)
+                    self._last_signal_info[alias] = {
+                        'time': now,
+                        'direction': signal_direction,
+                        'price': sig.entry,
+                        'last_swing_high': swing.get('last_high') if swing else None,
+                        'last_swing_low': swing.get('last_low') if swing else None
+                    }
                     
                     # === AUTO-TRADING: Try to execute signal automatically ===
                     if self.auto_trading_enabled:
@@ -2574,7 +2720,7 @@ Expires: {expires_time} (10:00 min)"""
                 self.signal_queue.clear()
             
             # Reset tracking proměnných
-            self._last_signal_time = {}
+            self._last_signal_info = {}  # Updated to use enhanced signal tracking
             self._last_insufficient_data_log = {}
             self._last_no_signal_log = {}
             self._last_analysis_log = {}
@@ -3696,7 +3842,8 @@ Expires: {expires_time} (10:00 min)"""
 
         # Check for existing positions in BOTH risk_manager AND account_monitor
         # (risk_manager might not have position yet if order was just sent)
-        existing_positions = [p for p in self.risk_manager.open_positions if p.symbol == alias]
+        # CRITICAL FIX: Use thread-safe getter to prevent race condition
+        existing_positions = self.risk_manager.get_open_positions_copy(symbol=alias)
         
         # Also check account_monitor for real positions from account
         if self.account_monitor:
@@ -3786,7 +3933,8 @@ Expires: {expires_time} (10:00 min)"""
                     # Decide what to close
                     if close_all_on_reverse:
                         # Close ALL positions (more conservative)
-                        positions_to_close = list(self.risk_manager.open_positions)
+                        # CRITICAL FIX: Use thread-safe getter
+                        positions_to_close = self.risk_manager.get_open_positions_copy()
                         self.log(f"[AUTO-TRADING] Closing ALL {len(positions_to_close)} positions before reverse")
                     else:
                         # Close only positions for this symbol
@@ -3818,10 +3966,14 @@ Expires: {expires_time} (10:00 min)"""
                             close_result = self.order_executor.position_closer.close_position(position_data)
 
                             if close_result.get('success'):
-                                # Remove from risk manager after successful close order
-                                self.risk_manager.remove_position(pos_symbol, pnl_czk=0)
+                                # CRITICAL FIX: Do NOT remove from risk_manager here!
+                                # Wait for EXECUTION_EVENT confirmation (status 2 or 3) before removing.
+                                # AccountStateMonitor will handle removal in _handle_position_close_for_risk_manager()
+                                # when it receives EXECUTION_EVENT with closed position status.
+                                # This prevents race condition where position is removed but close order fails on server.
                                 closed_count += 1
-                                self.log(f"[AUTO-TRADING] ✅ Closed {pos_symbol} (close order sent)")
+                                self.log(f"[AUTO-TRADING] ✅ Close order sent for {pos_symbol} (waiting for EXECUTION_EVENT confirmation)")
+                                self.log(f"[AUTO-TRADING] 📋 Position will be removed from risk_manager when EXECUTION_EVENT confirms close")
                             else:
                                 failed_count += 1
                                 error = close_result.get('error', 'Unknown error')

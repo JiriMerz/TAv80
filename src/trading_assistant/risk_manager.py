@@ -9,6 +9,7 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+import threading
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ class RiskManager:
         self.config = config  # Uložit celý config pro pozdější použití
         self.balance_tracker = balance_tracker
         
+        # Thread safety
+        self._lock = threading.RLock()
+        
         # Account parameters
         self.account_balance = float(config.get('account_balance', 100000))
         self.account_currency = config.get('account_currency', 'CZK')
@@ -90,6 +94,21 @@ class RiskManager:
 
         logger.info(f"RiskManager initialized: Balance={self.account_balance} {self.account_currency}, "
                    f"Risk={self.max_risk_per_trade*100}%/trade, Max positions={self.max_positions}")
+    
+    def get_open_positions_copy(self, symbol: Optional[str] = None) -> List[PositionSize]:
+        """
+        Thread-safe getter for open positions
+        
+        Args:
+            symbol: Optional symbol filter
+            
+        Returns:
+            Copy of open positions list (filtered by symbol if provided)
+        """
+        with self._lock:
+            if symbol:
+                return [p for p in self.open_positions if p.symbol == symbol]
+            return list(self.open_positions)
 
     def _auto_detect_account_size(self):
         """Auto-detect actual account size and update daily loss limit to 5%"""
@@ -410,8 +429,9 @@ class RiskManager:
             return None
         
     def add_position(self, position: PositionSize):
-        """Add position to tracking"""
-        self.open_positions.append(position)
+        """Add position to tracking (thread-safe)"""
+        with self._lock:
+            self.open_positions.append(position)
         
         # NOVÝ LOG - rozšířený
         total_risk = sum(p.risk_amount_czk for p in self.open_positions)
@@ -433,16 +453,17 @@ class RiskManager:
                         f"{total_risk_pct:.1f}%/{self.max_risk_total*100:.1f}%")
 
     def remove_position(self, symbol: str, pnl_czk: float = 0):
-        """Remove position and update daily PnL"""
-        # Najdi pozici pro log
-        removed_position = None
-        for p in self.open_positions:
-            if p.symbol == symbol:
-                removed_position = p
-                break
-        
-        self.open_positions = [p for p in self.open_positions if p.symbol != symbol]
-        self.daily_pnl += pnl_czk
+        """Remove position and update daily PnL (thread-safe)"""
+        with self._lock:
+            # Najdi pozici pro log
+            removed_position = None
+            for p in self.open_positions:
+                if p.symbol == symbol:
+                    removed_position = p
+                    break
+            
+            self.open_positions = [p for p in self.open_positions if p.symbol != symbol]
+            self.daily_pnl += pnl_czk
         
         # ROZŠÍŘENÝ LOG
         if removed_position:
