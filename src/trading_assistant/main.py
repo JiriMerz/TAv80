@@ -12,12 +12,34 @@ import hashlib
 import os
 import threading
 import time
-import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional
 from collections import deque
 import traceback
-from typing import Dict
+
+# AppDaemon import with fallback for development
+try:
+    import appdaemon.plugins.hass.hassapi as hass
+except ImportError:
+    # Mock class for development environments where AppDaemon is not installed
+    class MockHass:
+        """Mock AppDaemon Hass class for development."""
+        def __init__(self):
+            pass
+        def log(self, message):
+            print(f"[MockHass] {message}")
+        def get_state(self, entity_id, attribute=None):
+            return None
+        def set_state(self, entity_id, **kwargs):
+            pass
+        def call_service(self, domain, service, **kwargs):
+            pass
+    
+    class MockHassModule:
+        class Hass(MockHass):
+            pass
+    
+    hass = MockHassModule()
 from .pivots import PivotCalculator
 from .simple_swing_detector import SimpleSwingDetector  # Reliable swing detection
 from .risk_manager import RiskManager
