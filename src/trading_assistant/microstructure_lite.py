@@ -207,7 +207,7 @@ class MicrostructureAnalyzer:
             if symbol == 'DAX':
                 session_start = datetime.combine(date, time(9, 0))  # 09:00 Prague
             elif symbol == 'NASDAQ':
-                session_start = datetime.combine(date, time(14, 30))  # 14:30 Prague
+                session_start = datetime.combine(date, time(15, 30))  # 15:30 Prague
             else:
                 logger.warning(f"Unknown symbol for session start: {symbol}")
                 return None
@@ -286,6 +286,11 @@ class MicrostructureAnalyzer:
             # Check for breakout in subsequent bars
             post_or_bars = session_bars[self.or_duration_minutes // 5:]
 
+            # Check if ORB was already detected for this symbol today
+            previous_result = self.opening_ranges.get(symbol, {})
+            previous_orb_timestamp = previous_result.get('orb_timestamp')
+            previous_orb_triggered = previous_result.get('orb_triggered', False)
+            
             orb_triggered = None
             orb_direction = None
             orb_timestamp = None
@@ -295,13 +300,17 @@ class MicrostructureAnalyzer:
                     orb_triggered = True
                     orb_direction = 'LONG'
                     orb_timestamp = bar['timestamp']
-                    logger.info(f"[{symbol}] ORB LONG triggered at {orb_timestamp}, breakout above {or_high}")
+                    # Only log if this is a new detection (not already logged)
+                    if not previous_orb_triggered or previous_orb_timestamp != orb_timestamp:
+                        logger.info(f"[{symbol}] ORB LONG triggered at {orb_timestamp}, breakout above {or_high}")
                     break
                 elif bar['low'] < or_low and not orb_triggered:
                     orb_triggered = True
                     orb_direction = 'SHORT'
                     orb_timestamp = bar['timestamp']
-                    logger.info(f"[{symbol}] ORB SHORT triggered at {orb_timestamp}, breakout below {or_low}")
+                    # Only log if this is a new detection (not already logged)
+                    if not previous_orb_triggered or previous_orb_timestamp != orb_timestamp:
+                        logger.info(f"[{symbol}] ORB SHORT triggered at {orb_timestamp}, breakout below {or_low}")
                     break
 
             result = {
@@ -497,5 +506,5 @@ class MicrostructureAnalyzer:
             'liquidity_score': liquidity,
             'atr_analysis': atr_data,
             'absorption': absorption,
-            'is_high_quality_time': liquidity > self.config.get('min_liquidity_score', 0.5) and not atr_data.get('is_elevated', False)
+            'is_high_quality_time': liquidity > self.config.get('min_liquidity_score', 0.1) and not atr_data.get('is_elevated', False)
         }

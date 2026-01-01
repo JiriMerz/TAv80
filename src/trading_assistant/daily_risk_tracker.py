@@ -26,16 +26,29 @@ class DailyRiskTracker:
     - Stores trade history for analysis
     """
     
-    def __init__(self, daily_limit_percentage: float = 0.015, balance_tracker=None):
+    def __init__(self, daily_limit_percentage: float = 0.015, balance_tracker=None, config: Dict = None):
         """
         Initialize daily risk tracker
         
         Args:
             daily_limit_percentage: Daily risk limit as decimal (0.015 = 1.5%)
             balance_tracker: BalanceTracker instance for current balance
+            config: Configuration dict for additional settings (PHASE 2)
         """
         self.daily_limit_percentage = daily_limit_percentage
         self.balance_tracker = balance_tracker
+        self.config = config or {}
+        
+        # PHASE 2: Daily loss soft cap
+        self.daily_loss_soft_cap = self.config.get('daily_loss_soft_cap', None)
+        if self.daily_loss_soft_cap is None:
+            # Default to 75% of daily limit if not specified
+            self.daily_loss_soft_cap = daily_limit_percentage * 0.75
+        else:
+            # Validate that soft cap is less than daily limit
+            if self.daily_loss_soft_cap >= daily_limit_percentage:
+                logger.warning(f"[DAILY_RISK] Soft cap {self.daily_loss_soft_cap:.1%} >= daily limit {daily_limit_percentage:.1%}, adjusting to 75% of limit")
+                self.daily_loss_soft_cap = daily_limit_percentage * 0.75
         
         # Daily tracking
         self.current_date: Optional[date] = None
@@ -47,6 +60,8 @@ class DailyRiskTracker:
         self.max_history_days = 30
         
         logger.info(f"[DAILY_RISK] Initialized with {daily_limit_percentage:.1%} daily limit")
+        if self.daily_loss_soft_cap:
+            logger.info(f"[DAILY_RISK] Soft cap at {self.daily_loss_soft_cap:.1%} - stops new entries when reached")
     
     def _ensure_current_date(self):
         """Ensure we're tracking the current date, reset if new day"""
@@ -114,31 +129,64 @@ class DailyRiskTracker:
         self._ensure_current_date()
         
         daily_limit = self._get_daily_limit()
+        daily_loss_soft_cap_limit = self._get_soft_cap_limit()
         risk_after_trade = self.daily_risk_used + proposed_risk
         would_exceed = risk_after_trade > daily_limit
+        would_exceed_soft_cap = risk_after_trade > daily_loss_soft_cap_limit
         
         remaining_risk = max(0, daily_limit - self.daily_risk_used)
+        remaining_risk_soft_cap = max(0, daily_loss_soft_cap_limit - self.daily_risk_used)
         risk_percentage_used = self.daily_risk_used / daily_limit if daily_limit > 0 else 0
         risk_percentage_after = risk_after_trade / daily_limit if daily_limit > 0 else 0
+        
+        # PHASE 2: Soft cap check - block new entries if soft cap reached
+        if self.daily_risk_used >= daily_loss_soft_cap_limit:
+            result = {
+                'can_trade': False,  # Block trading when soft cap reached
+                'proposed_risk': proposed_risk,
+                'scaled_risk': 0,
+                'scale_factor': 0,
+                'daily_limit': daily_limit,
+                'soft_cap_limit': daily_loss_soft_cap_limit,
+                'risk_used': self.daily_risk_used,
+                'risk_remaining': 0,
+                'risk_after_trade': self.daily_risk_used,
+                'percentage_used': risk_percentage_used,
+                'percentage_after': risk_percentage_after,
+                'trades_count': len(self.daily_trades),
+                'would_exceed': True,
+                'soft_cap_reached': True,
+                'scaled': False,
+                'reason': f"Soft cap reached: {self.daily_risk_used:,.0f} >= {daily_loss_soft_cap_limit:,.0f} CZK"
+            }
+            logger.warning(f"[DAILY_RISK] ⛔ Trade blocked - daily loss soft cap reached: "
+                          f"{self.daily_risk_used:,.0f} >= {daily_loss_soft_cap_limit:,.0f} CZK")
+            return result
         
         # Soft-cap scaling: if would exceed, suggest scaled down risk
         scaled_risk = proposed_risk
         scale_factor = 1.0
 
-        if would_exceed and remaining_risk > 0:
-            # Scale down to fit remaining budget
+        if would_exceed_soft_cap and remaining_risk_soft_cap > 0:
+            # Scale down to fit soft cap budget
+            scale_factor = remaining_risk_soft_cap / proposed_risk
+            scaled_risk = remaining_risk_soft_cap
+            logger.info(f"[DAILY_RISK] Soft-cap scaling: {proposed_risk:,.0f} → {scaled_risk:,.0f} CZK "
+                       f"(scale factor: {scale_factor:.2f}, approaching soft cap)")
+        elif would_exceed and remaining_risk > 0:
+            # Scale down to fit hard limit budget
             scale_factor = remaining_risk / proposed_risk
             scaled_risk = remaining_risk
-
-            logger.info(f"[DAILY_RISK] Soft-cap scaling: {proposed_risk:,.0f} → {scaled_risk:,.0f} CZK "
+            logger.info(f"[DAILY_RISK] Hard limit scaling: {proposed_risk:,.0f} → {scaled_risk:,.0f} CZK "
                        f"(scale factor: {scale_factor:.2f})")
 
         result = {
-            'can_trade': True,  # Always allow trading with soft-cap
+            'can_trade': True,  # Always allow trading with soft-cap (unless soft cap reached)
             'proposed_risk': proposed_risk,
             'scaled_risk': scaled_risk,
             'scale_factor': scale_factor,
             'daily_limit': daily_limit,
+            'soft_cap_limit': daily_loss_soft_cap_limit,
             'risk_used': self.daily_risk_used,
             'risk_remaining': remaining_risk,
             'risk_after_trade': self.daily_risk_used + scaled_risk,
@@ -146,21 +194,27 @@ class DailyRiskTracker:
             'percentage_after': (self.daily_risk_used + scaled_risk) / daily_limit if daily_limit > 0 else 0,
             'trades_count': len(self.daily_trades),
             'would_exceed': would_exceed,
+            'soft_cap_reached': False,
             'scaled': scale_factor < 1.0
         }
 
-        if would_exceed and remaining_risk > 0:
-            logger.info(f"[DAILY_RISK] Trade scaled down to fit daily limit: "
-                       f"{scaled_risk:,.0f} CZK ({remaining_risk:,.0f} remaining)")
-        elif would_exceed and remaining_risk <= 0:
+        if would_exceed and remaining_risk <= 0:
             result['can_trade'] = False
             logger.warning(f"[DAILY_RISK] Trade rejected - daily limit exhausted: "
                           f"{self.daily_risk_used:,.0f} >= {daily_limit:,.0f} CZK")
         else:
             logger.debug(f"[DAILY_RISK] Trade allowed: {proposed_risk:,.0f} CZK "
-                        f"({remaining_risk:,.0f} remaining)")
+                        f"({remaining_risk:,.0f} remaining, soft cap: {daily_loss_soft_cap_limit:,.0f} CZK)")
         
         return result
+    
+    def _get_soft_cap_limit(self) -> float:
+        """Get daily loss soft cap limit in CZK"""
+        if self.balance_tracker is None:
+            return 0
+            
+        current_balance = self.balance_tracker.get_current_balance()
+        return current_balance * self.daily_loss_soft_cap
     
     def add_trade(self, trade_data: Dict[str, Any]) -> bool:
         """

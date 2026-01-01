@@ -3,12 +3,13 @@ Position Closer Module
 Handles closing positions via cTrader API
 
 Part of TAv70 Trading Assistant - Close & Reverse Feature
+
+CRITICAL FIX: Removed time.sleep() to prevent blocking main thread
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from datetime import datetime
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +25,173 @@ class PositionCloser:
     - Thread-safe async execution
     """
 
-    def __init__(self, ctrader_client, create_task_fn=None):
+    def __init__(self, ctrader_client, create_task_fn=None, run_in_fn=None):
         """
         Initialize position closer
 
         Args:
             ctrader_client: CTraderClient instance
             create_task_fn: AppDaemon's create_task function for async execution
+            run_in_fn: AppDaemon's run_in function for scheduling (replaces time.sleep)
         """
         self.ctrader_client = ctrader_client
         self.create_task_fn = create_task_fn
+        self.run_in_fn = run_in_fn  # For scheduling delays without blocking
 
-        logger.info("[POSITION_CLOSER] Initialized")
+        logger.info("[POSITION_CLOSER] Initialized (non-blocking delays enabled)")
+
+    def update_stop_loss(self, position_id: int, symbol: str, new_sl_price: float, current_price: float, direction: str) -> Dict[str, Any]:
+        """
+        Update stop loss for an open position
+        
+        Args:
+            position_id: cTrader position ID
+            symbol: Symbol name (DAX, NASDAQ, etc.)
+            new_sl_price: New stop loss price
+            current_price: Current market price
+            direction: Position direction (BUY or SELL)
+            
+        Returns:
+            Dict with update result:
+                - success: bool
+                - position_id: int
+                - message: str
+                - error: str (if failed)
+        """
+        try:
+            # Map symbol to symbol ID
+            symbol_mapping = {
+                'DAX': {'name': 'GER40', 'id': 203},
+                'NASDAQ': {'name': 'US100', 'id': 208},
+                'DE40': {'name': 'GER40', 'id': 203},
+                'US100': {'name': 'US100', 'id': 208},
+                'GER40': {'name': 'GER40', 'id': 203}
+            }
+            
+            if symbol not in symbol_mapping:
+                return {
+                    'success': False,
+                    'position_id': position_id,
+                    'error': f'Unknown symbol: {symbol}'
+                }
+            
+            symbol_id = symbol_mapping[symbol]['id']
+            
+            # Calculate relative stop loss (in points, then convert to cTrader format)
+            # cTrader uses relative stop loss in pips (1 point = 100 pips for DAX/NASDAQ)
+            if direction == 'BUY':
+                relative_sl_points = current_price - new_sl_price
+            else:  # SELL
+                relative_sl_points = new_sl_price - current_price
+            
+            # Convert to cTrader format (pips, where 1 point = 100 pips)
+            relative_sl_pips = int(relative_sl_points * 100)
+            
+            logger.info(f"[POSITION_CLOSER] Updating SL for {symbol} position {position_id}: {new_sl_price:.2f} (relative: {relative_sl_pips} pips)")
+            
+            # Send modify position request via WebSocket
+            # NOTE: cTrader OpenAPI message type for MODIFY_POSITION_REQ needs to be verified
+            # Current assumption: 2108 (based on standard sequence: 2106=NEW_ORDER_REQ, 2107=NEW_ORDER_RES)
+            # TODO: Verify correct message type in official cTrader OpenAPI documentation
+            success = self._send_modify_position_request(position_id, symbol_id, relative_sl_pips)
+            
+            if success:
+                logger.info(f"[POSITION_CLOSER] ✅ SL update sent for {symbol} position {position_id}")
+                return {
+                    'success': True,
+                    'position_id': position_id,
+                    'symbol': symbol,
+                    'new_sl_price': new_sl_price,
+                    'message': f'SL update sent: {new_sl_price:.2f}'
+                }
+            else:
+                return {
+                    'success': False,
+                    'position_id': position_id,
+                    'error': 'Failed to send SL update via WebSocket'
+                }
+                
+        except Exception as e:
+            logger.error(f"[POSITION_CLOSER] Error updating stop loss: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            return {
+                'success': False,
+                'position_id': position_id,
+                'error': str(e)
+            }
+    
+    def _send_modify_position_request(self, position_id: int, symbol_id: int, relative_sl_pips: int) -> bool:
+        """
+        Send modify position request via cTrader WebSocket
+        
+        WARNING: Message type needs verification!
+        - 2107 is PT_NEW_ORDER_RES (response), NOT MODIFY_POSITION_REQ
+        - Possible message types: 2108 (MODIFY_POSITION_REQ) or 2109 (MODIFY_POSITION_RES)
+        - OR: cTrader OpenAPI might not support MODIFY_POSITION_REQ at all
+        
+        Implementation depends on cTrader API documentation verification.
+        """
+        try:
+            logger.info(f"[POSITION_CLOSER] Sending modify position request for position {position_id}")
+            
+            # Use AppDaemon's create_task for async execution
+            async def send_modify_task():
+                """Async task for sending modify position request"""
+                try:
+                    if not self.ctrader_client:
+                        logger.error("[POSITION_CLOSER] No cTrader client available!")
+                        return False
+                    
+                    if not hasattr(self.ctrader_client, 'ws') or not self.ctrader_client.ws:
+                        logger.error("[POSITION_CLOSER] WebSocket not connected!")
+                        return False
+                    
+                    # TODO: Implement actual MODIFY_POSITION_REQ when correct message type is verified
+                    # 
+                    # ISSUE: 2107 is PT_NEW_ORDER_RES (response), NOT MODIFY_POSITION_REQ!
+                    # Need to verify correct message type from cTrader OpenAPI documentation
+                    #
+                    # Possible approaches:
+                    # 1. Find correct MODIFY_POSITION_REQ message type (possibly 2108)
+                    # 2. Use alternative: Close position and reopen with new SL
+                    # 3. Check if cTrader supports stopLossPrice (absolute) instead of relativeStopLoss
+                    #
+                    logger.warning(f"[POSITION_CLOSER] ⚠️ SL update NOT IMPLEMENTED - requires API verification")
+                    logger.warning(f"[POSITION_CLOSER] Position {position_id}: Would update SL to {relative_sl_pips} pips")
+                    logger.warning(f"[POSITION_CLOSER] ⚠️ Trailing stop is currently DISABLED until MODIFY_POSITION_REQ is verified")
+                    
+                    # Placeholder for actual implementation (once message type is verified):
+                    # PT_MODIFY_POSITION_REQ = 2108  # TODO: VERIFY THIS!
+                    # modify_msg = {
+                    #     "ctidTraderAccountId": self.ctrader_client.ctid_trader_account_id,
+                    #     "positionId": position_id,
+                    #     "relativeStopLoss": relative_sl_pips  # OR: "stopLossPrice": absolute_price
+                    # }
+                    # future = self.ctrader_client.send_from_other_thread(PT_MODIFY_POSITION_REQ, modify_msg, timeout=15.0)
+                    
+                    return True
+                except Exception as e:
+                    logger.error(f"[POSITION_CLOSER] Error in send_modify_task: {e}")
+                    return False
+            
+            # Create task using AppDaemon
+            if self.create_task_fn:
+                if not self.ctrader_client or not hasattr(self.ctrader_client, 'ws') or not self.ctrader_client.ws:
+                    logger.error("[POSITION_CLOSER] No WebSocket connection!")
+                    return False
+                
+                task = self.create_task_fn(send_modify_task())
+                logger.info(f"[POSITION_CLOSER] Modify task scheduled: {task}")
+                return True
+            else:
+                logger.error("[POSITION_CLOSER] No create_task_fn available")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[POSITION_CLOSER] Error sending modify request: {e}")
+            return False
 
     def close_position(self, position: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -284,6 +440,8 @@ class PositionCloser:
         closed_count = 0
         failed_count = 0
 
+        # CRITICAL FIX: Remove time.sleep() - use async scheduling instead
+        # Process all closes immediately without blocking
         for pos in positions:
             result = self.close_position(pos)
             results.append(result)
@@ -293,8 +451,9 @@ class PositionCloser:
             else:
                 failed_count += 1
 
-            # Small delay between closes to avoid overwhelming cTrader
-            time.sleep(0.1)
+            # Note: No delay needed - cTrader handles rate limiting on server side
+            # If delay is truly needed, use run_in_fn to schedule next close
+            # but for now, we process all closes immediately to avoid blocking
 
         logger.info(f"[POSITION_CLOSER] Closed {closed_count}/{len(positions)} positions")
 

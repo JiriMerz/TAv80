@@ -1,0 +1,88 @@
+# Home Assistant Template Entities - Robustní varianty
+# Tento soubor můžeš přidat do configuration.yaml nebo jako samostatný include
+
+template:
+  # ============================================
+  # DAX M1 Regime Raw Parsing
+  # ============================================
+  - sensor:
+      - name: "DAX M1 ADX"
+        unique_id: dax_m1_adx
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('adx=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+        unit_of_measurement: ""
+        device_class: none
+
+      - name: "DAX M1 R²"
+        unique_id: dax_m1_r2
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('r2=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+        unit_of_measurement: ""
+        device_class: none
+
+      - name: "DAX M1 Pivot"
+        unique_id: dax_m1_pivot
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 'NA' }}
+          {% else %}
+            {% set m = s | regex_findall('pivot=([A-Z0-9]+|NA)') %}
+            {{ m[0] if m|length else 'NA' }}
+          {% endif %}
+        device_class: none
+
+  # ============================================
+  # NASDAQ M1 Regime Raw Parsing
+  # ============================================
+  - sensor:
+      - name: "NASDAQ M1 ADX"
+        unique_id: nasdaq_m1_adx
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('adx=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+        unit_of_measurement: ""
+        device_class: none
+
+      - name: "NASDAQ M1 R²"
+        unique_id: nasdaq_m1_r2
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('r2=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+        unit_of_measurement: ""
+        device_class: none
+
+      - name: "NASDAQ M1 Pivot"
+        unique_id: nasdaq_m1_pivot
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 'NA' }}
+          {% else %}
+            {% set m = s | regex_findall('pivot=([A-Z0-9]+|NA)') %}
+            {{ m[0] if m|length else 'NA' }}
+          {% endif %}
+        device_class: none
+

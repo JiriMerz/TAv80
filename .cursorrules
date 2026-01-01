@@ -1,0 +1,94 @@
+# Trading Assistant - Cursor Rules & Project Context
+
+## 🎯 Project Overview
+Automatický swing trading assistant pro DAX a NASDAQ, běžící na Raspberry Pi s Home Assistant a AppDaemon. Používá cTrader Open API pro obchodování.
+
+## 📁 Project Structure
+```
+Main project:    /Users/jirimerz/Projects/TAv80/
+Worktree:        /Users/jirimerz/.cursor/worktrees/TAv80/jir/
+RPi deployment:  /Volumes/addon_configs/a0d7b954_appdaemon/apps/
+```
+
+## 🔄 Deployment Workflow (VŽDY DODRŽOVAT!)
+1. **Edit** - Upravit soubory v aktuálním workspace
+2. **Sync to worktree** - `cp <file> /Users/jirimerz/.cursor/worktrees/TAv80/jir/<path>`
+3. **Deploy to RPi** - `cp <file> /Volumes/addon_configs/a0d7b954_appdaemon/apps/<path>`
+4. **Verify** - `md5 <local> <worktree> <rpi>` - všechny 3 hashe musí být stejné
+5. **Restart AppDaemon** - Uživatel restartuje ručně přes HA UI
+
+## 📝 Key Files
+| Soubor | Cesta | Účel |
+|--------|-------|------|
+| main.py | src/trading_assistant/ | Hlavní aplikační logika, zpracování dat, signály |
+| ctrader_client.py | src/trading_assistant/ | WebSocket připojení k cTrader API |
+| apps.yaml | src/ | AppDaemon konfigurace, trading hours, holidays |
+| dashboard.yaml | / | Home Assistant dashboard |
+| edges.py | src/trading_assistant/ | Detekce obchodních signálů |
+| regime.py | src/trading_assistant/ | Detekce tržního režimu (TREND_UP/DOWN/RANGING) |
+| pullback_detector.py | src/trading_assistant/ | Detekce pullbacků pro swing trading |
+
+## ⚙️ System Architecture
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  cTrader API    │────▶│  AppDaemon/RPi   │────▶│  Home Assistant │
+│  (WebSocket)    │     │  (Python app)    │     │  (Dashboard)    │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+```
+
+## 🕐 Trading Hours (CET timezone)
+- **DAX (GER40)**: 09:00 - 15:30
+- **NASDAQ (US100)**: 15:30 - 22:00
+
+## 📅 Market Holidays (2025-2026)
+Konfigurovány v `apps.yaml` pod `market_holidays`:
+- DAX: XETRA holidays (Nový rok, Velikonoce, Vánoce, atd.)
+- NASDAQ: US holidays (MLK Day, Presidents Day, Thanksgiving, atd.)
+
+## 🔧 Recent Fixes (Keep Updated!)
+1. **Race condition fix** (2026-01-01): `_process_data()` nyní kontroluje přímo `ctrader_client.is_connected()` místo HA entity (ta měla zpoždění 30s)
+2. **TypeError fix** (2026-01-01): Přidána kontrola `None` hodnot pro `current_price` a `last_price`
+3. **Token refresh** (2026-01-01): Implementován automatický refresh cTrader access tokenu
+
+## 🔑 cTrader API
+- **Demo server**: wss://demo.ctraderapi.com:5036
+- **Account ID**: 42478187
+- **Symbols**: US100 (ID: 208), GER40 (ID: 203)
+- **Credentials**: V `/Volumes/addon_configs/a0d7b954_appdaemon/secrets.yaml`
+
+## 📊 Trading Strategy
+- **Typ**: Swing trading na pullbacky v trendu
+- **Regime detection**: ADX + Linear Regression pro určení trendu
+- **Entry**: Pullback do 38.2%-61.8% Fibonacci zóny s reversal patternem
+- **EMA34 filter**: Obchoduje se pouze ve směru EMA34 trendu
+- **Risk**: 0.5-0.6% na obchod, max 4% denně
+
+## 🏠 Home Assistant Entities
+- `binary_sensor.ctrader_connected` - Stav připojení k cTrader
+- `sensor.trading_analysis_status` - RUNNING/STOPPED
+- `sensor.dax_market_status` - OPEN/CLOSED
+- `sensor.nasdaq_market_status` - OPEN/CLOSED
+- `input_boolean.auto_trading_enabled` - Hlavní přepínač obchodování
+
+## 🐛 Debugging Tips
+- Log je v AppDaemon addon logu (HA → Settings → Add-ons → AppDaemon → Log)
+- `[SYSTEM_CHECK]` - Kontrola stavu před zpracováním dat
+- `[PROCESS_DATA]` - Zpracování tržních dat
+- `[REGIME]` - Detekce tržního režimu
+- `[PULLBACK]` - Detekce pullbacků
+
+## 🇨🇿 Communication
+- Uživatel preferuje **česky**
+- Technické termíny lze ponechat v angličtině
+
+## 📋 Typical Tasks
+1. **Kontrola logu** - Analyzovat AppDaemon log, najít chyby
+2. **Oprava kódu** - Edit → Sync → Deploy → Verify → Restart
+3. **Konfigurace** - Úpravy v apps.yaml (holidays, trading hours)
+4. **Dashboard** - Úpravy v dashboard.yaml, import přes HA raw editor
+
+## ⚠️ Important Notes
+- NIKDY neměnit git config
+- RPi je připojeno přes SMB mount na /Volumes/addon_configs/
+- Před editací vždy přečíst aktuální stav souboru
+- Po změnách vždy ověřit MD5 všech 3 kopií

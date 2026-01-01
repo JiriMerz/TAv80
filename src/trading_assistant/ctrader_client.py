@@ -53,6 +53,9 @@ PT_GET_TRENDBARS_RES        = 2138
 # Trading operations
 PT_NEW_ORDER_REQ            = 2106
 PT_NEW_ORDER_RES            = 2107
+# NOTE: MODIFY_POSITION_REQ/RES message types need verification
+# Possible: PT_MODIFY_POSITION_REQ = 2108, PT_MODIFY_POSITION_RES = 2109
+# OR: cTrader OpenAPI might not support position modification via separate message type
 PT_EXECUTION_EVENT          = 2126
 PT_ORDER_ERROR_EVENT        = 2132
 
@@ -462,7 +465,15 @@ class CTraderClient:
                     self.bars[symbol].extend(processed[-100:])  # Add recent bars
 
                     # Send to callback
-                    self.on_bar_callback(symbol, processed[-1], processed)
+                    try:
+                        if self.on_bar_callback is None:
+                            logger.error(f"[CTRADER] ❌ on_bar_callback is None!")
+                        else:
+                            self.on_bar_callback(symbol, processed[-1], processed)
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"[CTRADER] ❌ Error calling on_bar_callback for {symbol}: {e}")
+                        logger.error(f"[CTRADER] Traceback: {traceback.format_exc()}")
                     logger.info(f"[📊 TRENDBARS] Sent {len(processed)} out-of-order bars for {symbol}")
 
         except Exception as e:
@@ -829,7 +840,12 @@ class CTraderClient:
                     
                     # Poslat VŽDY, bez podmínky warmup
                     if self.on_bar_callback:
-                        self.on_bar_callback(symbol, closed_bar)
+                        try:
+                            self.on_bar_callback(symbol, closed_bar)
+                        except Exception as e:
+                            import traceback
+                            logger.error(f"[CTRADER] ❌ Error calling on_bar_callback for closed bar {symbol}: {e}")
+                            logger.error(f"[CTRADER] Traceback: {traceback.format_exc()}")
                         logger.debug(f"[M5] Sent closed bar to main.py")
                 
                 # Vytvořit NOVÝ bar
@@ -1263,9 +1279,24 @@ class CTraderClient:
         # TODO: Notify order executor of acknowledgment
     
     def _handle_execution_event(self, msg: Dict):
-        """Handle EXECUTION_EVENT - position fill confirmation"""
+        """Handle EXECUTION_EVENT - position fill confirmation
+        
+        CRITICAL FIX: Also push to EventBridge as CRITICAL event (never drop)
+        """
         payload = msg.get("payload", {})
         execution_type = payload.get("executionType")
+
+        # CRITICAL FIX: Push to EventBridge as priority event (never dropped)
+        if self.event_bridge:
+            try:
+                self.event_bridge.push_event(
+                    'EXECUTION_EVENT',
+                    payload,
+                    priority=1  # PRIORITY_CRITICAL - never drop
+                )
+                logger.debug(f"[CTRADER] ✅ EXECUTION_EVENT pushed to EventBridge (type: {execution_type})")
+            except Exception as e:
+                logger.error(f"[CTRADER] ❌ Failed to push EXECUTION_EVENT to EventBridge: {e}")
 
         if execution_type == 3:  # ORDER_FILLED
             logger.info(f"[🚨 POSITION OPENED] Order filled! Position created: {payload}")
@@ -1293,7 +1324,23 @@ class CTraderClient:
                     logger.error(f"[🚨 CALLBACK ERROR] Execution callback failed: {e}")
     
     def _handle_order_error(self, msg: Dict):
-        """Handle ORDER_ERROR_EVENT - order rejection"""
+        """Handle ORDER_ERROR_EVENT - order rejection
+        
+        CRITICAL FIX: Also push to EventBridge as CRITICAL event (never drop)
+        """
+        payload = msg.get("payload", {})
+        
+        # CRITICAL FIX: Push to EventBridge as priority event (never dropped)
+        if self.event_bridge:
+            try:
+                self.event_bridge.push_event(
+                    'ERROR',
+                    {'type': 'ORDER_ERROR', 'data': payload},
+                    priority=1  # PRIORITY_CRITICAL - never drop
+                )
+                logger.debug(f"[CTRADER] ✅ ORDER_ERROR pushed to EventBridge")
+            except Exception as e:
+                logger.error(f"[CTRADER] ❌ Failed to push ORDER_ERROR to EventBridge: {e}")
         logger.warning(f"[🚨 ORDER REJECTED] cTrader rejected order: {msg}")
         # Notify order executor of rejection
         if self.on_execution_callback:

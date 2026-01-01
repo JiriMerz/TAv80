@@ -1,6 +1,6 @@
 # =====================
 # apps.yaml - M5 WIDE STOPS FINAL
-# 2025-01-03
+# 2025-12-22
 # =====================
 
 trading_assistant:
@@ -13,7 +13,7 @@ trading_assistant:
     enabled: true # AUTO-TRADING: Zapnuto ve výchozím stavu
     per_trade_risk_pct: 0.005 # 0.5% per trade
     daily_risk_limit_pct: 0.04 # 4% daily limit (to accommodate fixed position sizing)
-    max_concurrent_positions: 3
+    max_concurrent_positions: 1  # CHANGED: Only 1 position at a time
     enable_time_based_switching: false # TESTING: Vypnuto pro test DAX tlačítka
 
   # === POSITION CONFLICT HANDLING STRATEGY ===
@@ -116,8 +116,9 @@ trading_assistant:
 
   min_profit_ratio: 0.25 # Min 25% of risk
   max_risk_total: 0.03 # 3% total
-  max_positions: 3  # Max 3 concurrent positions (sync with auto_trading)
-  daily_loss_limit: 0.05 # 5% daily max
+  max_positions: 1  # CHANGED: Only 1 position at a time (close-and-reverse enabled)
+  daily_loss_limit: 0.02 # ↓ PHASE 2: Reduced from 0.05 to 0.02 (2% daily max)
+  daily_loss_soft_cap: 0.015 # NEW PHASE 2: Soft cap at 1.5% - stop new entries
   max_margin_usage: 0.80 # 80% margin max
 
   # Position sizing parameters
@@ -282,14 +283,36 @@ trading_assistant:
   # === PULLBACK DETECTION ===
   pullback:
     min_trend_strength: 25 # Minimum ADX for pullback detection
-    max_retracement_pct: 0.618 # Max 61.8% fibonacci retracement
-    min_retracement_pct: 0.236 # Min 23.6% fibonacci retracement
+    max_retracement_pct: 0.618 # Max 61.8% fibonacci retracement (Golden Ratio)
+    min_retracement_pct: 0.382 # Min 38.2% fibonacci retracement (best practices - reliable level for swing trading)
     structure_touch_atr: 0.5 # Distance to structure levels (in ATR)
     min_structure_age: 5 # Min bars old for structure levels
     vwap_touch_distance: 0.1 # % distance from VWAP for entry
     confluence_bonus: 15 # Bonus points for multiple levels
     momentum_divergence_bonus: 20 # Bonus for momentum divergence
+    reversal_pattern_bonus: 15 # Bonus for reversal candlestick patterns (hammer, engulfing, pin bar)
+    pin_bar_ratio: 0.3 # Minimum wick-to-body ratio for pin bars
+    min_wick_ratio: 0.6 # Minimum wick-to-range ratio for hammer/shooting star (60% of total range)
     lookback_days: 30
+
+  # === Time Synchronization ===
+  time_sync:
+    enable_time_sync: true  # Enable NTP time synchronization
+    sync_interval_seconds: 3600  # Resync every hour (3600 seconds)
+
+  # === Logging Configuration ===
+  logging:
+    log_level: verbose  # minimal, normal, verbose, debug
+    throttle_repeated_logs: true  # Throttle repeated messages
+    throttle_window_seconds: 300  # Throttle window (5 minutes)
+
+  # === Watchdog Configuration (Dead Man's Switch) ===
+  watchdog:
+    watchdog_entity: input_boolean.trading_watchdog  # Entity to update every 60s
+    update_interval: 60  # Seconds between updates (default: 60)
+    alert_threshold: 180  # Seconds before alert (default: 180 = 3 minutes)
+    kill_switch_enabled: false  # Enable kill switch on timeout (default: false)
+    kill_switch_entity: input_boolean.trading_kill_switch  # Entity for kill switch
 
   # === Analysis Modules ===
   regime:
@@ -300,6 +323,19 @@ trading_assistant:
     regression_period: 20
     regression_r2_threshold: 0.6
     enable_hurst: false
+    # Multi-timeframe regime detection
+    use_multi_timeframe: true  # Enable multi-timeframe detection (primary + secondary)
+    primary_window: 100  # Recentní trend window (8 hodin na M5)
+    secondary_window: 180  # Celkový kontext window (15 hodin na M5)
+    # Trend change detection
+    use_trend_change_detection: true  # Detekovat změny trendu
+    short_trend_window: 30  # Krátkodobý trend (2.5 hodiny)
+    medium_trend_window: 60  # Střednědobý trend (5 hodin)
+    # EMA34 integration
+    use_ema34_primary: true  # Použít EMA34 trend jako primary indicator
+    # Exponential weighted regression
+    use_weighted_regression: false  # Použít exponenciálně váženou regresi (experimentální)
+    weight_decay: 0.95  # Decay factor pro weighted regression
 
   pivots:
     pivot_tolerance_atr: 0.30
@@ -335,31 +371,31 @@ trading_assistant:
     min_rrr_for_wide: 1.5
     target_rrr_wide: 2.0
 
-    # Risk/Reward
-    min_rrr: 1.2  # TESTING: Lowered from 1.8 to 1.2 for initial signal generation (2025-10-08)
-    standard_rrr: 2.0
-    max_rrr: 3.0
+    # Risk/Reward - PHASE 1 IMPROVEMENTS (2025-12-22)
+    min_rrr: 2.0  # ↑ Increased from 1.2 to 2.0 for better Profit Factor
+    standard_rrr: 2.5  # ↑ Increased from 2.0 to 2.5 (target R:R)
+    max_rrr: 3.5  # ↑ Increased from 3.0 to 3.5
 
-    # Quality thresholds
-    min_swing_quality: 25  # TESTING: Lowered from 50 to 25 to match SwingEngine defaults (2025-10-08)
-    min_signal_quality: 60
-    min_confidence: 70
-    default_confidence: 70
-    default_signal_quality: 75
+    # Quality thresholds - PHASE 1 IMPROVEMENTS (2025-12-22)
+    min_swing_quality: 50  # ↑ Increased from 25 to 50 (already adjusted for pullback detection)
+    min_signal_quality: 75  # ↑ Increased from 60 to 75 for higher quality signals
+    min_confidence: 80  # ↑ Increased from 70 to 80 for better selectivity
+    default_confidence: 80  # ↑ Increased from 70 to 80
+    default_signal_quality: 80  # ↑ Increased from 75 to 80
 
     # Pattern parameters
     pin_bar_ratio: 0.3
     engulfing_min_size: 0.9
     momentum_threshold_atr: 0.8
 
-    # Timing
-    min_bars_between_signals: 6  # PHASE 1: Increased from 3 to 6 (2025-10-08)
+    # Timing - PHASE 1 IMPROVEMENTS (2025-12-22)
+    min_bars_between_signals: 12  # ↑ Increased from 6 to 12 (1 hour on M5) for better selectivity
     swing_break_lookback: 10
 
-    # Pivot interference handling
+    # Pivot interference handling - PHASE 1 IMPROVEMENTS (2025-12-22)
     pivot_interference_buffer_atr: 0.15  # ATR buffer for SL/TP adjustments around pivots
     pivot_interference_quality_penalty: -15  # Quality penalty % for signals with pivot interference
-    pivot_interference_min_rrr: 1.5  # Minimum RRR required after pivot adjustments
+    pivot_interference_min_rrr: 2.0  # ↑ Increased from 1.5 to 2.0 (must match global min_rrr)
 
     # Other
     tick_size: 0.5
@@ -369,8 +405,8 @@ trading_assistant:
 
   signal_manager:
     trigger_zone_atr: 0.2
-    notify_on_new: true
-    notify_on_trigger: true
+    notify_on_new: false  # Disabled - notify only when position is CONFIRMED opened (via EXECUTION_EVENT type 3)
+    notify_on_trigger: false  # Disabled - notify only when position is CONFIRMED opened (via EXECUTION_EVENT type 3)
     notify_on_expire: false
     max_history: 100
     validity_aggressive: 2
@@ -380,24 +416,96 @@ trading_assistant:
     missed_atr_multiple: 1.5
 
   # === Quality Trading Hours Configuration ===
+  # Source: Official exchange websites (xetra.com, nasdaq.com) - Updated 2025-12-31
   trading_hours:
     enabled: true
     timezone: "Europe/Prague"
 
     DAX:
-      monday: "09:00-15:30"     # DAX quality hours
-      tuesday: "09:00-15:30"    # DAX quality hours
-      wednesday: "09:00-15:30"  # DAX quality hours
-      thursday: "09:00-15:30"   # DAX quality hours
-      friday: "09:00-15:30"     # DAX quality hours
+      # XETRA/DAX: 09:00-17:30 CET (official hours from xetra.com)
+      # We use quality hours ending at 15:30 to avoid low-liquidity close
+      monday: "09:00-17:30"     # Full XETRA hours
+      tuesday: "09:00-17:30"    # Full XETRA hours
+      wednesday: "09:00-17:30"  # Full XETRA hours
+      thursday: "09:00-17:30"   # Full XETRA hours
+      friday: "09:00-17:30"     # Full XETRA hours
       saturday: null            # Weekend - no trading
       sunday: null              # Weekend - no trading
 
     NASDAQ:
-      monday: "14:30-22:00"     # NASDAQ quality hours
-      tuesday: "14:30-22:00"    # NASDAQ quality hours
-      wednesday: "14:30-22:00"  # NASDAQ quality hours
-      thursday: "14:30-22:00"   # NASDAQ quality hours
-      friday: "14:30-22:00"     # NASDAQ quality hours
+      # NASDAQ: 09:30-16:00 ET = 15:30-22:00 CET (winter) / 14:30-21:00 CET (summer)
+      # Using CET times for Prague timezone
+      monday: "15:30-22:00"     # NASDAQ regular hours (EST)
+      tuesday: "15:30-22:00"    # NASDAQ regular hours
+      wednesday: "15:30-22:00"  # NASDAQ regular hours
+      thursday: "15:30-22:00"   # NASDAQ regular hours
+      friday: "15:30-22:00"     # NASDAQ regular hours
       saturday: null            # Weekend - no trading
       sunday: null              # Weekend - no trading
+
+  # === Market Holidays Configuration (2025) ===
+  # Dates when exchanges are CLOSED - no trading allowed
+  market_holidays:
+    DAX:
+      # Source: xetra.com trading calendar 2025
+      - "2025-01-01"  # New Year's Day
+      - "2025-04-18"  # Good Friday
+      - "2025-04-21"  # Easter Monday
+      - "2025-05-01"  # Labour Day
+      - "2025-12-24"  # Christmas Eve
+      - "2025-12-25"  # Christmas Day
+      - "2025-12-26"  # Boxing Day
+      - "2025-12-31"  # New Year's Eve
+    
+    NASDAQ:
+      # Source: nasdaq.com holiday schedule 2025
+      - "2025-01-01"  # New Year's Day
+      - "2025-01-20"  # Martin Luther King Jr. Day
+      - "2025-02-17"  # Presidents' Day
+      - "2025-04-18"  # Good Friday
+      - "2025-05-26"  # Memorial Day
+      - "2025-06-19"  # Juneteenth
+      - "2025-07-04"  # Independence Day
+      - "2025-09-01"  # Labor Day
+      - "2025-11-27"  # Thanksgiving Day
+      - "2025-12-25"  # Christmas Day
+  
+  # Early close days (market closes early)
+  early_close_days:
+    DAX:
+      - date: "2025-12-30"
+        close_time: "14:00"  # Early close before New Year's Eve
+    
+    NASDAQ:
+      - date: "2025-07-03"
+        close_time: "19:00"  # 13:00 ET = 19:00 CET
+      - date: "2025-11-28"
+        close_time: "19:00"  # Day after Thanksgiving
+      - date: "2025-12-24"
+        close_time: "19:00"  # Christmas Eve
+
+  # === Trailing Stops Configuration - PHASE 1 IMPROVEMENTS (2025-12-22) ===
+  trailing_stops:
+    enabled: true
+    breakeven_activation_pct: 0.2  # ↓ Reduced from 0.3 to 0.2 (earlier breakeven)
+    trailing_activation_pct: 0.3   # ↓ Reduced from 0.5 to 0.3 (earlier trailing)
+    trailing_distance_atr: 1.0     # ↓ Reduced from 1.5 to 1.0 (tighter trailing)
+    breakeven_buffer_pct: 0.001    # 0.1% buffer for breakeven
+    breakeven_buffer_atr: 0.1      # Alternative: ATR-based buffer
+
+  # === Partial Exits Configuration - PHASE 2 IMPROVEMENTS (2025-12-22) ===
+  partial_exits:
+    enabled: true
+    exit_levels:
+      - profit_pct: 1.5  # Exit 50% at 1.5× risk (R:R 1.5:1)
+        exit_pct: 0.5    # 50% of position
+      - profit_pct: 2.5  # Exit 25% at 2.5× risk (R:R 2.5:1)
+        exit_pct: 0.25   # 25% of position
+      # Remaining 25% runs to TP or trailing stop
+
+  # === Dynamic Risk Adjustments - PHASE 2 IMPROVEMENTS (2025-12-22) ===
+  risk_adjustments:
+    drawdown_reduction_enabled: true
+    drawdown_threshold_pct: 0.10  # 10% drawdown triggers reduction
+    risk_reduction_factor: 0.5    # Reduce risk to 50% when in drawdown
+    recovery_threshold_pct: 0.05  # Recover when drawdown < 5%

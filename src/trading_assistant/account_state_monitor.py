@@ -31,12 +31,15 @@ class AccountStateMonitor:
     Account monitor based exactly on working demo but adapted for existing client callbacks
     """
 
-    def __init__(self, ctrader_client, app_instance, config: Dict = None, risk_manager=None, balance_tracker=None):
+    def __init__(self, ctrader_client, app_instance, config: Dict = None, risk_manager=None, balance_tracker=None, performance_tracker=None, trailing_stop_manager=None, partial_exit_manager=None):
         self.client = ctrader_client
         self.app = app_instance
         self.config = config or {}
         self.risk_manager = risk_manager  # CRITICAL FIX: Add risk manager reference
         self.balance_tracker = balance_tracker  # CRITICAL: Add balance tracker reference for execution event updates
+        self.performance_tracker = performance_tracker  # NEW: Performance tracking
+        self.trailing_stop_manager = trailing_stop_manager  # NEW: Trailing stop management
+        self.partial_exit_manager = partial_exit_manager  # NEW: Partial exit management
 
         # Thread-safe state
         self._lock = threading.RLock()
@@ -91,6 +94,18 @@ class AccountStateMonitor:
 
         Retry pattern: 0s, 1s, 2s before giving up
         """
+        # Blacklist of corrupted entities that cause HTTP 400 errors
+        # These entities will be skipped to prevent system slowdown
+        CORRUPTED_ENTITIES_BLACKLIST = {
+            'sensor.trading_open_positions',
+            'sensor.trading_daily_pnl',
+            'sensor.trading_daily_pnl_percent',
+        }
+        
+        # Skip corrupted entities silently
+        if entity_id in CORRUPTED_ENTITIES_BLACKLIST:
+            return None
+        
         import time
         attrs = self._jsonify_attrs(attributes or {})
 
@@ -415,23 +430,57 @@ class AccountStateMonitor:
                         found = False
                         for i, pos in enumerate(self._account_state['open_positions']):
                             if pos.get('positionId') == position_id:
+                                # Position already exists - just update it
                                 self._account_state['open_positions'][i] = position
                                 found = True
+                                logger.debug(f"[ACCOUNT_MONITOR] 📊 Updated existing position {position_id}")
                                 break
                         if not found:
+                            # New position - add it
                             self._account_state['open_positions'].append(position)
-                        logger.info(f"[ACCOUNT_MONITOR] ✅ Updated/Added open position {position_id}")
+                            # NEW: Add to trailing stop manager
+                            self._add_position_to_trailing_stop(position)
+                            # NEW: Add to partial exit manager
+                            self._add_position_to_partial_exit(position)
+                            logger.info(f"[ACCOUNT_MONITOR] ✅ Added new open position {position_id}")
+                        else:
+                            logger.info(f"[ACCOUNT_MONITOR] ✅ Updated existing open position {position_id}")
                     elif status in [2, 3] or volume == 0:  # Position CLOSED (status 2 = closed, status 3 = partially closed)
                         # Remove position only if really closed
-                        if status == 3 and execution_type == 2:
-                            # Status 3 with exec type 2 might be just order creation, not position close
-                            logger.debug(f"[ACCOUNT_MONITOR] 📊 Ignoring status 3 with exec type 2 (order creation)")
+                        # CRITICAL FIX: If volume is 0, position is definitely closed, regardless of execution_type
+                        # BUT: execution_type 2 with status 3 and volume 0 is order creation, NOT position close!
+                        is_order_creation = (execution_type == 2 and status == 3 and volume == 0)
+                        
+                        if is_order_creation:
+                            # This is order creation before position opens - ignore it
+                            logger.debug(f"[ACCOUNT_MONITOR] 📊 Ignoring order creation event (exec_type=2, status=3, volume=0) - position not yet opened")
+                        elif status == 3 and execution_type == 2 and volume > 0:
+                            # Status 3 with exec type 2 and volume > 0 might be just order creation, not position close
+                            logger.debug(f"[ACCOUNT_MONITOR] 📊 Ignoring status 3 with exec type 2 and volume > 0 (order creation)")
                         else:
+                            # Position is closed: remove it
+                            removed_count = len(self._account_state['open_positions'])
                             self._account_state['open_positions'] = [
                                 pos for pos in self._account_state['open_positions']
                                 if pos.get('positionId') != position_id
                             ]
-                            logger.info(f"[ACCOUNT_MONITOR] ✅ Removed closed position {position_id} (status={status}, volume={volume})")
+                            removed_count = removed_count - len(self._account_state['open_positions'])
+                            
+                            if removed_count > 0:
+                                # NEW: Remove from trailing stop manager
+                                if self.trailing_stop_manager:
+                                    self.trailing_stop_manager.remove_position(str(position_id))
+                                # NEW: Remove from partial exit manager
+                                if self.partial_exit_manager:
+                                    self.partial_exit_manager.remove_position(str(position_id))
+                                logger.info(f"[ACCOUNT_MONITOR] ✅ Removed closed position {position_id} (status={status}, volume={volume}, exec_type={execution_type})")
+                                
+                                # CRITICAL FIX: Update risk manager when positions close - ONLY if position was actually removed
+                                # This is required for close-and-reverse functionality to work
+                                if self.risk_manager:
+                                    self._handle_position_close_for_risk_manager(payload)
+                            else:
+                                logger.debug(f"[ACCOUNT_MONITOR] 📊 Position {position_id} not found in open_positions (already removed?)")
 
                         # Extract balance and PnL data from execution event if available
                         self._extract_balance_from_execution_event(payload)
@@ -451,14 +500,6 @@ class AccountStateMonitor:
                         if status in [1, 2, 3]:  # Position opened (1), SL/TP closed (2), or manually closed (3)
                             logger.info(f"[ACCOUNT_MONITOR] 🎯 EVENT-DRIVEN: Position {position_id} status changed to {status}, requesting deals update")
                             self._request_deals_async("execution_event")
-
-                            # CRITICAL FIX: Update risk manager when positions close
-                            # Use status field (2 or 3 = closed) instead of execution_type
-                            # Execution type 3 = order filled/position opened, type 5 = position closed
-                            # But status field is more reliable: status 2 = closed, status 3 = partially closed
-                            if status in [2, 3] and self.risk_manager:  # Position closed
-                                self._handle_position_close_for_risk_manager(payload)
-
                         else:
                             logger.debug(f"[ACCOUNT_MONITOR] 📊 Execution event status {status} - no deals request needed")
 
@@ -805,6 +846,14 @@ class AccountStateMonitor:
                 self.risk_manager.daily_pnl += pnl_czk
                 logger.info(f"[ACCOUNT_MONITOR] 📊 Risk manager updated: {original_count} → {len(self.risk_manager.open_positions)} positions")
 
+                # NEW: Track trade in performance tracker
+                if self.performance_tracker:
+                    self._track_closed_trade(removed_pos, pnl_czk, deal, close_detail)
+
+                # NEW: Check for pending reverse signal
+                if self.app and hasattr(self.app, '_check_pending_reverse'):
+                    self.app._check_pending_reverse(str(position_id), symbol)
+
                 # Force risk manager status update
                 risk_status = self.risk_manager.get_risk_status()
                 logger.info(f"[ACCOUNT_MONITOR] 🎯 Risk status: {len(self.risk_manager.open_positions)} positions, can_trade={risk_status.can_trade}")
@@ -813,6 +862,283 @@ class AccountStateMonitor:
             logger.error(f"[ACCOUNT_MONITOR] Error handling position close for risk manager: {e}")
             import traceback
             logger.error(f"[ACCOUNT_MONITOR] Traceback: {traceback.format_exc()}")
+
+    def _track_closed_trade(self, position, pnl_czk: float, deal: Dict, close_detail: Dict):
+        """
+        Track closed trade in performance tracker
+        
+        Args:
+            position: PositionSize from risk_manager
+            pnl_czk: Net PnL in CZK
+            deal: Deal dict from execution event
+            close_detail: ClosePositionDetail dict
+        """
+        try:
+            if not self.performance_tracker:
+                return
+            
+            from .performance_tracker import TradeResult
+            
+            # Extract deal information
+            execution_timestamp = deal.get('executionTimestamp', 0)
+            exit_time = datetime.fromtimestamp(execution_timestamp / 1000, tz=timezone.utc) if execution_timestamp else datetime.now(timezone.utc)
+            
+            # Calculate entry time (estimate: current time - duration, or use position creation time if available)
+            # For now, estimate entry time as 1 hour before exit (will be improved with actual entry tracking)
+            entry_time = exit_time - timedelta(hours=1)
+            
+            # Extract prices
+            entry_price = position.entry_price
+            exit_price = close_detail.get('closePrice', entry_price)  # Use close price if available
+            
+            # Calculate actual R:R
+            sl_distance = abs(entry_price - position.stop_loss)
+            tp_distance = abs(position.take_profit - entry_price)
+            actual_rrr = 0.0
+            if sl_distance > 0:
+                if pnl_czk > 0:
+                    # Win: calculate R:R based on actual profit vs risk
+                    actual_rrr = (pnl_czk / position.risk_amount_czk) if position.risk_amount_czk > 0 else 0.0
+                else:
+                    # Loss: R:R is negative or 0
+                    actual_rrr = -1.0
+            
+            # Determine direction from position
+            direction = "BUY"  # Default, will be determined from price movement if needed
+            if position.take_profit < entry_price:
+                direction = "SELL"
+            
+            # Extract commission
+            commission_raw = close_detail.get('commission', 0)
+            money_digits = deal.get('moneyDigits', 2)
+            scaling_factor = 10 ** money_digits
+            commission_czk = commission_raw / scaling_factor
+            
+            # Calculate duration
+            duration_minutes = int((exit_time - entry_time).total_seconds() / 60)
+            
+            # Create TradeResult
+            trade_result = TradeResult(
+                trade_id=f"trade_{deal.get('dealId', 'unknown')}",
+                symbol=position.symbol,
+                direction=direction,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                entry_time=entry_time,
+                exit_time=exit_time,
+                lots=position.lots,
+                pnl_czk=pnl_czk,
+                commission_czk=commission_czk,
+                net_pnl_czk=pnl_czk,  # Net PnL already includes commission
+                risk_amount_czk=position.risk_amount_czk,
+                sl_price=position.stop_loss,
+                tp_price=position.take_profit,
+                actual_rrr=actual_rrr,
+                signal_quality=0.0,  # Will be enhanced later with signal data
+                signal_confidence=0.0,  # Will be enhanced later with signal data
+                regime="UNKNOWN",  # Will be enhanced later
+                setup_type="UNKNOWN",  # Will be enhanced later
+                duration_minutes=duration_minutes
+            )
+            
+            # Track trade
+            self.performance_tracker.track_trade(trade_result)
+            
+            # Update performance metrics in HA
+            self._update_performance_metrics()
+            
+        except Exception as e:
+            logger.error(f"[ACCOUNT_MONITOR] Error tracking closed trade: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def _update_performance_metrics(self):
+        """Update performance metrics in Home Assistant"""
+        try:
+            if not self.performance_tracker:
+                return
+            
+            metrics = self.performance_tracker.get_metrics()
+            
+            # Update main metrics entity
+            self._set_state_safe(
+                "sensor.trading_performance",
+                state=f"{metrics.win_rate:.1f}%",
+                attributes={
+                    "friendly_name": "Trading Performance",
+                    "icon": "mdi:chart-line",
+                    "win_rate": round(metrics.win_rate, 1),
+                    "profit_factor": round(metrics.profit_factor, 2),
+                    "total_trades": metrics.total_trades,
+                    "winning_trades": metrics.winning_trades,
+                    "losing_trades": metrics.losing_trades,
+                    "expectancy_czk": round(metrics.expectancy_czk, 0),
+                    "average_win_czk": round(metrics.average_win_czk, 0),
+                    "average_loss_czk": round(metrics.average_loss_czk, 0),
+                    "sharpe_ratio": round(metrics.sharpe_ratio, 2),
+                    "max_drawdown_czk": round(metrics.max_drawdown_czk, 0),
+                    "max_drawdown_pct": round(metrics.max_drawdown_pct, 1),
+                    "average_rrr": round(metrics.average_rrr, 2),
+                    "last_updated": metrics.last_updated.isoformat()
+                }
+            )
+            
+            # Update individual metric entities
+            self._set_state_safe("sensor.trading_win_rate", state=round(metrics.win_rate, 1), attributes={
+                "friendly_name": "Win Rate",
+                "icon": "mdi:percent",
+                "unit_of_measurement": "%"
+            })
+            
+            self._set_state_safe("sensor.trading_profit_factor", state=round(metrics.profit_factor, 2), attributes={
+                "friendly_name": "Profit Factor",
+                "icon": "mdi:chart-timeline-variant"
+            })
+            
+            self._set_state_safe("sensor.trading_expectancy", state=round(metrics.expectancy_czk, 0), attributes={
+                "friendly_name": "Expectancy",
+                "icon": "mdi:currency-czk",
+                "unit_of_measurement": "CZK"
+            })
+            
+        except Exception as e:
+            logger.error(f"[ACCOUNT_MONITOR] Error updating performance metrics: {e}")
+
+    def _add_position_to_trailing_stop(self, position: Dict):
+        """Add position to trailing stop manager"""
+        try:
+            if not self.trailing_stop_manager:
+                return
+            
+            position_id = str(position.get('positionId', ''))
+            trade_data = position.get('tradeData', {})
+            symbol_id = trade_data.get('symbolId', 0)
+            
+            # Map symbol ID to symbol name
+            symbol = 'NASDAQ' if symbol_id == 208 else ('DAX' if symbol_id == 203 else f'SYMBOL_{symbol_id}')
+            
+            # Get position details
+            entry_price = position.get('price', 0)
+            volume = trade_data.get('volume', 0) / 100  # Convert to lots
+            trade_side = trade_data.get('tradeSide', 1)  # 1=SELL, 2=BUY
+            direction = 'BUY' if trade_side == 2 else 'SELL'
+            
+            # Get SL/TP from position (if available)
+            stop_loss = position.get('stopLoss', 0)
+            take_profit = position.get('takeProfit', 0)
+            
+            # Get ATR from app instance (if available)
+            atr = 50  # Default fallback
+            if self.app and hasattr(self.app, 'current_atr'):
+                atr = self.app.current_atr.get(symbol, 50)
+            
+            # Prepare position data for trailing stop manager
+            position_data = {
+                'symbol': symbol,
+                'direction': direction,
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'lots': volume,
+                'atr': atr
+            }
+            
+            self.trailing_stop_manager.add_position(position_id, position_data)
+            
+        except Exception as e:
+            logger.error(f"[ACCOUNT_MONITOR] Error adding position to trailing stop: {e}")
+
+    def _check_trailing_stops(self):
+        """Periodically check and update trailing stops for open positions"""
+        try:
+            if not self.trailing_stop_manager or not self.trailing_stop_manager.enabled:
+                return
+            
+            with self._lock:
+                open_positions = list(self._account_state.get('open_positions', []))
+            
+            if not open_positions:
+                logger.debug(f"[TRAILING] No open positions to check")
+                return
+            
+            logger.debug(f"[TRAILING] Checking trailing stops for {len(open_positions)} open positions")
+            
+            # Get current prices and ATR for all symbols
+            current_prices = {}
+            atr_values = {}
+            
+            for position in open_positions:
+                trade_data = position.get('tradeData', {})
+                symbol_id = trade_data.get('symbolId', 0)
+                symbol = 'NASDAQ' if symbol_id == 208 else ('DAX' if symbol_id == 203 else f'SYMBOL_{symbol_id}')
+                
+                # Get current price
+                current_price = self._get_current_price(symbol_id)
+                if current_price > 0:
+                    current_prices[symbol] = current_price
+                    logger.debug(f"[TRAILING] Got price for {symbol}: {current_price:.2f}")
+                else:
+                    logger.debug(f"[TRAILING] ⚠️ Could not get price for {symbol} (symbol_id={symbol_id})")
+                
+                # Get ATR
+                if self.app and hasattr(self.app, 'current_atr'):
+                    atr_values[symbol] = self.app.current_atr.get(symbol, 50)
+                else:
+                    atr_values[symbol] = 50
+            
+            if not current_prices:
+                logger.debug(f"[TRAILING] ⚠️ No current prices available, skipping trailing stop check")
+                return
+            
+            # Check and update stops
+            self.trailing_stop_manager.check_and_update_stops(open_positions, current_prices, atr_values)
+            
+            # NEW: Check and execute partial exits
+            if self.partial_exit_manager:
+                self.partial_exit_manager.check_and_execute_exits(open_positions, current_prices)
+            
+        except Exception as e:
+            logger.error(f"[ACCOUNT_MONITOR] Error checking trailing stops: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _add_position_to_partial_exit(self, position: Dict):
+        """Add position to partial exit manager"""
+        try:
+            if not self.partial_exit_manager:
+                return
+            
+            position_id = str(position.get('positionId', ''))
+            trade_data = position.get('tradeData', {})
+            symbol_id = trade_data.get('symbolId', 0)
+            
+            # Map symbol ID to symbol name
+            symbol = 'NASDAQ' if symbol_id == 208 else ('DAX' if symbol_id == 203 else f'SYMBOL_{symbol_id}')
+            
+            # Get position details
+            entry_price = position.get('price', 0)
+            volume = trade_data.get('volume', 0) / 100  # Convert to lots
+            trade_side = trade_data.get('tradeSide', 1)  # 1=SELL, 2=BUY
+            direction = 'BUY' if trade_side == 2 else 'SELL'
+            
+            # Get SL/TP from position (if available)
+            stop_loss = position.get('stopLoss', 0)
+            take_profit = position.get('takeProfit', 0)
+            
+            # Prepare position data for partial exit manager
+            position_data = {
+                'symbol': symbol,
+                'direction': direction,
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'lots': volume
+            }
+            
+            self.partial_exit_manager.add_position(position_id, position_data)
+            
+        except Exception as e:
+            logger.error(f"[ACCOUNT_MONITOR] Error adding position to partial exit: {e}")
 
     def start_periodic_updates(self):
         """Initialize account monitoring - actual requests triggered by execution events"""

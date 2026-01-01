@@ -1,0 +1,612 @@
+title: Trading Desk v9.0 - Compact
+views:
+  - title: Home
+    path: home
+    icon: mdi:finance
+    badges: []
+    type: panel
+    cards:
+      - type: custom:stack-in-card
+        mode: vertical
+        card_mod:
+          style: |
+            ha-card {
+              max-width: 420px;
+              margin: 0 auto;
+              background: var(--ha-card-background, var(--card-background-color));
+            }
+            ha-card > * {
+              width: 100%;
+            }
+        cards:
+          - type: markdown
+            content: >
+              # Trading Desk v9.0 📊
+
+              ## {{ now().strftime('%a %d.%m.%Y %H:%M') | replace('Mon', 'Po') |
+              replace('Tue', 'Út') | replace('Wed', 'St') | replace('Thu', 'Čt')
+              | replace('Fri', 'Pá') | replace('Sat', 'So') | replace('Sun',
+              'Ne') }}
+            card_mod:
+              style: |
+                ha-card {
+                  background: transparent;
+                  box-shadow: none;
+                  padding: 8px 12px;
+                  text-align: center;
+                }
+                h1 {
+                  font-size: 18px;
+                  font-weight: 600;
+                  color: var(--primary-text-color);
+                  margin: 0;
+                  text-align: center;
+                }
+                h2 {
+                  font-size: 12px;
+                  font-weight: 400;
+                  color: var(--secondary-text-color);
+                  margin: 0;
+                  text-align: center;
+                }
+          - type: horizontal-stack
+            cards:
+              - type: custom:button-card
+                entity: input_boolean.auto_trading_enabled
+                name: Auto Trading
+                show_state: false
+                show_label: true
+                tap_action:
+                  action: toggle
+                label: |
+                  [[[
+                    if (!entity) return 'N/A';
+                    return entity.state === 'on' ? 'ENABLED ✓' : 'DISABLED';
+                  ]]]
+                styles:
+                  card:
+                    - background: |
+                        [[[
+                          const s = entity?.state;
+                          if (s === 'on') return 'linear-gradient(135deg, #059669, #10b981)';
+                          if (s === 'off') return 'linear-gradient(135deg, #334155, #1f2937)';
+                          return 'var(--card-background-color)';
+                        ]]]
+                    - border: |
+                        [[[
+                          const s = entity?.state;
+                          if (s === 'on') return '1px solid #34d399';
+                          if (s === 'off') return '1px solid rgba(255,255,255,0.12)';
+                          return '1px dashed rgba(255,255,255,0.20)';
+                        ]]]
+                    - border-radius: 8px
+                    - padding: 8px
+                    - height: 60px
+                  name:
+                    - font-size: 9px
+                    - text-transform: uppercase
+                    - letter-spacing: 0.5px
+                    - margin-bottom: 2px
+                    - color: |
+                        [[[
+                          const s = entity?.state;
+                          if (s === 'on') return 'rgba(255,255,255,0.85)';
+                          if (s === 'off') return 'rgba(255,255,255,0.70)';
+                          return 'var(--secondary-text-color)';
+                        ]]]
+                  label:
+                    - font-size: 16px
+                    - font-weight: 700
+                    - color: |
+                        [[[
+                          const s = entity?.state;
+                          if (s === 'on') return 'white';
+                          if (s === 'off') return 'rgba(255,255,255,0.95)';
+                          return 'var(--primary-text-color)';
+                        ]]]
+              - type: custom:button-card
+                entity: sensor.trading_risk_status
+                name: Daily P&L
+                show_state: false
+                show_label: true
+                tap_action:
+                  action: none
+                label: |
+                  [[[
+                    const pnl = states['sensor.trading_risk_status']?.attributes?.daily_pnl_pct || 0;
+                    const sign = pnl >= 0 ? '+' : '';
+                    return sign + parseFloat(pnl).toFixed(2) + '%';
+                  ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 8px
+                    - padding: 8px
+                    - height: 60px
+                  name:
+                    - font-size: 9px
+                    - text-transform: uppercase
+                    - letter-spacing: 0.5px
+                    - color: var(--secondary-text-color)
+                    - margin-bottom: 2px
+                  label:
+                    - font-size: 16px
+                    - font-weight: 700
+                    - color: |
+                        [[[
+                          const pnl = states['sensor.trading_risk_status']?.attributes?.daily_pnl_pct || 0;
+                          return pnl >= 0 ? '#10b981' : '#ef4444';
+                        ]]]
+              - type: custom:button-card
+                entity: sensor.trading_risk_status
+                name: Positions
+                show_state: false
+                show_label: true
+                tap_action:
+                  action: none
+                label: |
+                  [[[
+                    return states['sensor.trading_risk_status']?.attributes?.open_positions || '0';
+                  ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 8px
+                    - padding: 8px
+                    - height: 60px
+                  name:
+                    - font-size: 9px
+                    - text-transform: uppercase
+                    - letter-spacing: 0.5px
+                    - color: var(--secondary-text-color)
+                    - margin-bottom: 2px
+                  label:
+                    - font-size: 16px
+                    - font-weight: 700
+          - type: horizontal-stack
+            cards:
+              - type: custom:button-card
+                entity: sensor.trading_win_rate
+                name: Win Rate
+                show_state: false
+                show_label: true
+                tap_action:
+                  action: none
+                label: |
+                  [[[
+                    const v = parseFloat(entity?.state) || 0;
+                    return v.toFixed(1) + '%';
+                  ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 6px
+                    - padding: 6px
+                    - height: 50px
+                  name:
+                    - font-size: 8px
+                    - text-transform: uppercase
+                    - color: var(--secondary-text-color)
+                    - margin-bottom: 2px
+                  label:
+                    - font-size: 13px
+                    - font-weight: 600
+                    - color: '#10b981'
+              - type: custom:button-card
+                entity: sensor.trading_profit_factor
+                name: Profit F.
+                show_state: false
+                show_label: true
+                tap_action:
+                  action: none
+                label: |
+                  [[[
+                    const v = parseFloat(entity?.state) || 0;
+                    return v.toFixed(2);
+                  ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 6px
+                    - padding: 6px
+                    - height: 50px
+                  name:
+                    - font-size: 8px
+                    - text-transform: uppercase
+                    - color: var(--secondary-text-color)
+                    - margin-bottom: 2px
+                  label:
+                    - font-size: 13px
+                    - font-weight: 600
+                    - color: |
+                        [[[
+                          const v = parseFloat(entity?.state) || 0;
+                          return v >= 1.5 ? '#10b981' : v >= 1 ? '#f59e0b' : '#ef4444';
+                        ]]]
+              - type: custom:button-card
+                entity: sensor.trading_expectancy
+                name: Expectancy
+                show_state: false
+                show_label: true
+                tap_action:
+                  action: none
+                label: |
+                  [[[
+                    const v = parseFloat(entity?.state) || 0;
+                    const sign = v >= 0 ? '+' : '';
+                    return sign + v.toLocaleString('cs-CZ', {maximumFractionDigits: 0});
+                  ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 6px
+                    - padding: 6px
+                    - height: 50px
+                  name:
+                    - font-size: 8px
+                    - text-transform: uppercase
+                    - color: var(--secondary-text-color)
+                    - margin-bottom: 2px
+                  label:
+                    - font-size: 13px
+                    - font-weight: 600
+                    - color: |
+                        [[[
+                          const v = parseFloat(entity?.state) || 0;
+                          return v >= 0 ? '#10b981' : '#ef4444';
+                        ]]]
+          - type: horizontal-stack
+            cards:
+              - type: custom:button-card
+                entity: binary_sensor.ctrader_connected
+                show_name: false
+                show_state: false
+                show_icon: false
+                tap_action:
+                  action: none
+                custom_fields:
+                  dot: ''
+                  name: cTrader
+                  status: |
+                    [[[
+                      return entity?.state === 'on' ? 'Connected' : 'Disconnected';
+                    ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 6px
+                    - padding: 6px 10px
+                    - height: 36px
+                  grid:
+                    - grid-template-areas: '"dot name status"'
+                    - grid-template-columns: 14px auto 1fr
+                    - align-items: center
+                  custom_fields:
+                    dot:
+                      - width: 8px
+                      - height: 8px
+                      - border-radius: 50%
+                      - background: |
+                          [[[
+                            return entity?.state === 'on' ? '#10b981' : '#ef4444';
+                          ]]]
+                    name:
+                      - font-size: 11px
+                      - color: var(--secondary-text-color)
+                    status:
+                      - font-size: 12px
+                      - font-weight: 500
+                      - text-align: right
+                      - color: |
+                          [[[
+                            return entity?.state === 'on' ? '#10b981' : '#ef4444';
+                          ]]]
+              - type: custom:button-card
+                entity: sensor.trading_analysis_status
+                show_name: false
+                show_state: false
+                show_icon: false
+                tap_action:
+                  action: none
+                custom_fields:
+                  dot: ''
+                  name: Analysis
+                  status: |
+                    [[[
+                      return entity?.state || 'N/A';
+                    ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 6px
+                    - padding: 6px 10px
+                    - height: 36px
+                  grid:
+                    - grid-template-areas: '"dot name status"'
+                    - grid-template-columns: 14px auto 1fr
+                    - align-items: center
+                  custom_fields:
+                    dot:
+                      - width: 8px
+                      - height: 8px
+                      - border-radius: 50%
+                      - background: |
+                          [[[
+                            return entity?.state === 'RUNNING' ? '#10b981' : '#f59e0b';
+                          ]]]
+                    name:
+                      - font-size: 11px
+                      - color: var(--secondary-text-color)
+                    status:
+                      - font-size: 12px
+                      - font-weight: 500
+                      - text-align: right
+                      - color: |
+                          [[[
+                            return entity?.state === 'RUNNING' ? '#10b981' : '#f59e0b';
+                          ]]]
+              - type: custom:button-card
+                entity: sensor.trading_system_status
+                show_name: false
+                show_state: false
+                show_icon: false
+                tap_action:
+                  action: none
+                custom_fields:
+                  dot: ''
+                  name: System
+                  status: |
+                    [[[
+                      return entity?.state || 'N/A';
+                    ]]]
+                styles:
+                  card:
+                    - background: var(--card-background-color)
+                    - border-radius: 6px
+                    - padding: 6px 10px
+                    - height: 36px
+                  grid:
+                    - grid-template-areas: '"dot name status"'
+                    - grid-template-columns: 14px auto 1fr
+                    - align-items: center
+                  custom_fields:
+                    dot:
+                      - width: 8px
+                      - height: 8px
+                      - border-radius: 50%
+                      - background: |
+                          [[[
+                            const s = entity?.state;
+                            return s === 'OK' ? '#10b981' : s === 'WARNING' ? '#f59e0b' : '#ef4444';
+                          ]]]
+                    name:
+                      - font-size: 11px
+                      - color: var(--secondary-text-color)
+                    status:
+                      - font-size: 12px
+                      - font-weight: 500
+                      - text-align: right
+                      - color: |
+                          [[[
+                            const s = entity?.state;
+                            return s === 'OK' ? '#10b981' : s === 'WARNING' ? '#f59e0b' : '#ef4444';
+                          ]]]
+          - type: custom:button-card
+            entity: sensor.account_balance
+            show_name: false
+            show_state: false
+            show_icon: false
+            tap_action:
+              action: none
+            custom_fields:
+              balance_label: BALANCE
+              balance_value: |
+                [[[
+                  const v = parseFloat(entity?.state) || 0;
+                  return v.toLocaleString('cs-CZ', {minimumFractionDigits: 2, maximumFractionDigits: 2}).replace(/\u00A0/g, ' ') + ' Kč';
+                ]]]
+              pnl_label: DAILY P&L
+              pnl_value: |
+                [[[
+                  const pnl = states['sensor.trading_risk_status']?.attributes?.daily_pnl_czk || 0;
+                  const sign = pnl >= 0 ? '+' : '';
+                  return sign + parseFloat(pnl).toLocaleString('cs-CZ', {minimumFractionDigits: 2, maximumFractionDigits: 2}).replace(/\u00A0/g, ' ') + ' Kč';
+                ]]]
+            styles:
+              card:
+                - background: var(--card-background-color)
+                - border-radius: 8px
+                - padding: 12px
+              grid:
+                - grid-template-areas: '"balance_label pnl_label" "balance_value pnl_value"'
+                - grid-template-columns: 1fr auto
+              custom_fields:
+                balance_label:
+                  - font-size: 9px
+                  - text-transform: uppercase
+                  - color: var(--secondary-text-color)
+                  - justify-self: start
+                balance_value:
+                  - font-size: 22px
+                  - font-weight: 700
+                  - justify-self: start
+                pnl_label:
+                  - font-size: 9px
+                  - text-transform: uppercase
+                  - color: var(--secondary-text-color)
+                  - justify-self: end
+                pnl_value:
+                  - font-size: 16px
+                  - font-weight: 600
+                  - justify-self: end
+                  - color: |
+                      [[[
+                        const pnl = states['sensor.trading_risk_status']?.attributes?.daily_pnl_czk || 0;
+                        return pnl >= 0 ? '#10b981' : '#ef4444';
+                      ]]]
+          - type: custom:button-card
+            entity: sensor.dax_trading_status
+            show_name: false
+            show_state: false
+            show_icon: false
+            tap_action:
+              action: none
+            custom_fields:
+              table: |
+                [[[
+                  const fmt = (v, d=0) => {
+                    if (v == null || v === '---' || v === 'unavailable' || v === 'unknown' || v === '0' || v === '0.0') return '—';
+                    const num = parseFloat(v);
+                    if (isNaN(num)) return '—';
+                    return num.toLocaleString('cs-CZ', {minimumFractionDigits: d, maximumFractionDigits: d}).replace(/\u00A0/g, ' ');
+                  };
+                  
+                  const green = '#10b981';
+                  const red = '#ef4444';
+                  const orange = '#f59e0b';
+                  const daxBlue = '#1976D2';
+                  const nasdaqRed = '#D32F2F';
+                  const gray = 'var(--secondary-text-color)';
+                  const white = 'var(--primary-text-color)';
+                  
+                  // Market Status (NEW)
+                  const daxMarketStatus = states['sensor.dax_market_status']?.state || 'UNKNOWN';
+                  const nasdaqMarketStatus = states['sensor.nasdaq_market_status']?.state || 'UNKNOWN';
+                  const marketColor = (s) => s === 'OPEN' ? green : s === 'CLOSED' ? red : orange;
+                  
+                  // Market Analysis data
+                  const daxStatus = states['sensor.dax_trading_status']?.state || 'N/A';
+                  const nasdaqStatus = states['sensor.nasdaq_trading_status']?.state || 'N/A';
+                  const statusColor = (s) => s === 'ACTIVE' ? green : s === 'WARMING_UP' ? orange : red;
+                  
+                  const daxVwap = states['sensor.dax_vwap']?.state;
+                  const nasdaqVwap = states['sensor.nasdaq_vwap']?.state;
+                  
+                  const daxVwapDist = states['sensor.dax_vwap_distance_v2']?.state;
+                  const nasdaqVwapDist = states['sensor.nasdaq_vwap_distance_v2']?.state;
+                  
+                  const daxLiq = states['sensor.dax_liquidity_score_v2']?.state || '—';
+                  const nasdaqLiq = states['sensor.nasdaq_liquidity_score_v2']?.state || '—';
+                  
+                  const daxOrHigh = states['sensor.dax_or_high']?.state;
+                  const nasdaqOrHigh = states['sensor.nasdaq_or_high']?.state;
+                  const daxOrLow = states['sensor.dax_or_low']?.state;
+                  const nasdaqOrLow = states['sensor.nasdaq_or_low']?.state;
+                  const daxOrRange = states['sensor.dax_or_range']?.state;
+                  const nasdaqOrRange = states['sensor.nasdaq_or_range']?.state;
+                  
+                  const daxOrbTriggered = states['binary_sensor.dax_orb_triggered']?.state === 'on';
+                  const nasdaqOrbTriggered = states['binary_sensor.nasdaq_orb_triggered']?.state === 'on';
+                  const daxOrb = daxOrHigh === '---' ? 'Mimo' : daxOrbTriggered ? 'Breakout!' : 'Aktivní';
+                  const nasdaqOrb = nasdaqOrHigh === '---' ? 'Mimo' : nasdaqOrbTriggered ? 'Breakout!' : 'Aktivní';
+                  
+                  const daxVolZ = parseFloat(states['sensor.dax_volume_zscore_v2']?.state) || 0;
+                  const nasdaqVolZ = parseFloat(states['sensor.nasdaq_volume_zscore_v2']?.state) || 0;
+                  const volColor = (v) => Math.abs(v) > 2 ? red : Math.abs(v) > 1 ? orange : green;
+                  
+                  const daxRegime = states['sensor.dax_m1_regime_state']?.state || '—';
+                  const nasdaqRegime = states['sensor.nasdaq_m1_regime_state']?.state || '—';
+                  
+                  const daxAtr = states['sensor.dax_atr_current_v2']?.state;
+                  const nasdaqAtr = states['sensor.nasdaq_atr_current_v2']?.state;
+                  
+                  const daxSwing = states['sensor.dax_m1_swing_direction']?.state || 'UNKNOWN';
+                  const nasdaqSwing = states['sensor.nasdaq_m1_swing_direction']?.state || 'UNKNOWN';
+                  const swingColor = (s) => s === 'UP' ? green : s === 'DOWN' ? red : orange;
+                  
+                  // Pivot Points data
+                  const daxR2 = states['sensor.dax_m1_pivot_r2']?.state;
+                  const daxR1 = states['sensor.dax_m1_pivot_r1']?.state;
+                  const daxP = states['sensor.dax_m1_pivot_p']?.state;
+                  const daxS1 = states['sensor.dax_m1_pivot_s1']?.state;
+                  const daxS2 = states['sensor.dax_m1_pivot_s2']?.state;
+                  
+                  const nasdaqR2 = states['sensor.nasdaq_m1_pivot_r2']?.state;
+                  const nasdaqR1 = states['sensor.nasdaq_m1_pivot_r1']?.state;
+                  const nasdaqP = states['sensor.nasdaq_m1_pivot_p']?.state;
+                  const nasdaqS1 = states['sensor.nasdaq_m1_pivot_s1']?.state;
+                  const nasdaqS2 = states['sensor.nasdaq_m1_pivot_s2']?.state;
+                  
+                  // Live Activity data
+                  const daxAttrs = states['sensor.dax_live_status']?.attributes || {};
+                  const nasdaqAttrs = states['sensor.nasdaq_live_status']?.attributes || {};
+                  const daxBar = daxAttrs.last_bar_ago || 'N/A';
+                  const daxAnalysis = daxAttrs.last_analysis_ago || 'N/A';
+                  const daxSignal = daxAttrs.last_signal_check_ago || 'N/A';
+                  const nasdaqBar = nasdaqAttrs.last_bar_ago || 'N/A';
+                  const nasdaqAnalysis = nasdaqAttrs.last_analysis_ago || 'N/A';
+                  const nasdaqSignal = nasdaqAttrs.last_signal_check_ago || 'N/A';
+                  
+                  const row = (label, daxVal, nasdaqVal, daxColor=white, nasdaqColor=white, bold=false, isSection=false) => `
+                    <div style="display: grid; grid-template-columns: 80px 1fr 1fr 1fr 1fr; padding: ${isSection ? '8px' : '5px'} 10px; border-bottom: 1px solid rgba(255,255,255,${isSection ? '0.1' : '0.05'}); align-items: center; ${isSection ? 'background: rgba(0,0,0,0.15);' : ''}">
+                      <div style="font-size: 11px; color: ${isSection ? white : gray}; text-align: center; font-weight: ${isSection ? '600' : '400'};">${label}</div>
+                      <div></div>
+                      <div style="text-align: center; font-size: ${bold ? '13px' : '12px'}; font-weight: ${bold ? '700' : '500'}; font-family: 'SF Mono', Monaco, monospace; color: ${daxColor};">${daxVal}</div>
+                      <div></div>
+                      <div style="text-align: center; font-size: ${bold ? '13px' : '12px'}; font-weight: ${bold ? '700' : '500'}; font-family: 'SF Mono', Monaco, monospace; color: ${nasdaqColor};">${nasdaqVal}</div>
+                    </div>
+                  `;
+                  
+                  return `
+                    <div style="width: 100%; max-width: 100%; box-sizing: border-box; margin: 0 auto;">
+                      <div style="display: grid; grid-template-columns: 80px 1fr 1fr 1fr 1fr; padding: 6px 10px; background: rgba(0,0,0,0.3); font-size: 10px; text-transform: uppercase; border-radius: 0;">
+                        <div style="color: ${gray}; text-align: center; font-weight: 700;">Metric</div>
+                        <div></div>
+                        <div style="text-align: center; color: ${daxBlue}; font-weight: 700;">DAX</div>
+                        <div></div>
+                        <div style="text-align: center; color: ${nasdaqRed}; font-weight: 700;">NASDAQ</div>
+                      </div>
+                      ${row('Market', daxMarketStatus, nasdaqMarketStatus, marketColor(daxMarketStatus), marketColor(nasdaqMarketStatus), true)}
+                      ${row('Status', daxStatus, nasdaqStatus, statusColor(daxStatus), statusColor(nasdaqStatus))}
+                      ${row('VWAP', fmt(daxVwap), fmt(nasdaqVwap))}
+                      ${row('VWAP Dist', daxVwapDist ? daxVwapDist + '%' : '—', nasdaqVwapDist ? nasdaqVwapDist + '%' : '—')}
+                      ${row('Liquidity', daxLiq, nasdaqLiq)}
+                      ${row('OR High', fmt(daxOrHigh), fmt(nasdaqOrHigh))}
+                      ${row('OR Low', fmt(daxOrLow), fmt(nasdaqOrLow))}
+                      ${row('OR Range', fmt(daxOrRange, 1), fmt(nasdaqOrRange, 1))}
+                      ${row('ORB', daxOrb, nasdaqOrb)}
+                      ${row('Vol Z-Score', daxVolZ.toFixed(2) + ' σ', nasdaqVolZ.toFixed(2) + ' σ', volColor(daxVolZ), volColor(nasdaqVolZ), true)}
+                      ${row('Regime', daxRegime, nasdaqRegime, daxBlue, nasdaqRed)}
+                      ${row('ATR', fmt(daxAtr, 1) + ' pts', fmt(nasdaqAtr, 1) + ' pts')}
+                      ${row('Swing', daxSwing, nasdaqSwing, swingColor(daxSwing), swingColor(nasdaqSwing))}
+                      ${row('Pivots', '', '', white, white, false, true)}
+                      ${row('R2', fmt(daxR2), fmt(nasdaqR2))}
+                      ${row('R1', fmt(daxR1), fmt(nasdaqR1))}
+                      ${row('P', fmt(daxP), fmt(nasdaqP), white, white, true)}
+                      ${row('S1', fmt(daxS1), fmt(nasdaqS1))}
+                      ${row('S2', fmt(daxS2), fmt(nasdaqS2))}
+                      ${row('Live', '', '', white, white, false, true)}
+                      ${row('Bar', daxBar, nasdaqBar)}
+                      ${row('Analysis', daxAnalysis, nasdaqAnalysis)}
+                      <div style="display: grid; grid-template-columns: 80px 1fr 1fr 1fr 1fr; padding: 5px 10px; align-items: center; border-radius: 0 0 8px 8px;">
+                        <div style="font-size: 11px; color: ${gray}; text-align: center;">Signal</div>
+                        <div></div>
+                        <div style="text-align: center; font-size: 12px; font-weight: 500; font-family: 'SF Mono', Monaco, monospace; color: ${white};">${daxSignal}</div>
+                        <div></div>
+                        <div style="text-align: center; font-size: 12px; font-weight: 500; font-family: 'SF Mono', Monaco, monospace; color: ${white};">${nasdaqSignal}</div>
+                      </div>
+                    </div>
+                  `;
+                ]]]
+            styles:
+              card:
+                - background: var(--card-background-color)
+                - border-radius: 0px
+                - padding: 0
+                - overflow: hidden
+                - width: 100%
+                - max-width: 100%
+                - min-width: 100%
+                - box-sizing: border-box
+                - display: block
+                - margin: 0 auto
+              custom_fields:
+                table:
+                  - padding: 0
+                  - width: 100%
+                  - max-width: 100%
+                  - box-sizing: border-box
+                  - display: block
+                  - margin: 0 auto
+
+

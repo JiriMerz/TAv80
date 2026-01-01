@@ -9,6 +9,7 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+import threading
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ class RiskManager:
         self.config = config  # Uložit celý config pro pozdější použití
         self.balance_tracker = balance_tracker
         
+        # Thread safety
+        self._lock = threading.RLock()
+        
         # Account parameters
         self.account_balance = float(config.get('account_balance', 100000))
         self.account_currency = config.get('account_currency', 'CZK')
@@ -80,6 +84,16 @@ class RiskManager:
         self.regime_adjustments = config.get('regime_adjustments', {})
         self.volatility_adjustments = config.get('volatility_adjustments', {})
         
+        # PHASE 2: Dynamic risk reduction configuration
+        drawdown_config = self.risk_adjustments.get('drawdown_reduction_enabled', False)
+        self.drawdown_reduction_enabled = drawdown_config if isinstance(drawdown_config, bool) else False
+        self.drawdown_threshold_pct = self.risk_adjustments.get('drawdown_threshold_pct', 0.10)  # 10%
+        self.risk_reduction_factor = self.risk_adjustments.get('risk_reduction_factor', 0.5)  # 50% reduction
+        self.recovery_threshold_pct = self.risk_adjustments.get('recovery_threshold_pct', 0.05)  # 5%
+        
+        # Track equity high for drawdown calculation
+        self.equity_high = self.account_balance  # Initial equity high
+        
         # Track current state
         self.open_positions: List[PositionSize] = []
         self.daily_pnl = 0.0
@@ -90,6 +104,21 @@ class RiskManager:
 
         logger.info(f"RiskManager initialized: Balance={self.account_balance} {self.account_currency}, "
                    f"Risk={self.max_risk_per_trade*100}%/trade, Max positions={self.max_positions}")
+    
+    def get_open_positions_copy(self, symbol: Optional[str] = None) -> List[PositionSize]:
+        """
+        Thread-safe getter for open positions
+        
+        Args:
+            symbol: Optional symbol filter
+            
+        Returns:
+            Copy of open positions list (filtered by symbol if provided)
+        """
+        with self._lock:
+            if symbol:
+                return [p for p in self.open_positions if p.symbol == symbol]
+            return list(self.open_positions)
 
     def _auto_detect_account_size(self):
         """Auto-detect actual account size and update daily loss limit to 5%"""
@@ -105,11 +134,12 @@ class RiskManager:
                 # Update account balance
                 self.account_balance = actual_balance
 
-                # Set daily loss limit to exactly 5% of detected balance
-                self.daily_loss_limit = 0.05  # Always 5% regardless of config
+                # Keep daily loss limit from config (don't override with hardcoded value)
+                # self.daily_loss_limit already set from config in __init__
+                # PHASE 2: Respect config value (0.02 = 2%), don't override to 5%
 
                 logger.warning(f"[AUTO-DETECT] Account size updated: {old_balance:,.0f} → {actual_balance:,.0f} {self.account_currency}")
-                logger.warning(f"[AUTO-DETECT] Daily loss limit: {old_daily_limit*100:.1f}% → {self.daily_loss_limit*100:.1f}% = {actual_balance*self.daily_loss_limit:,.0f} CZK")
+                logger.info(f"[AUTO-DETECT] Daily loss limit: {self.daily_loss_limit*100:.1f}% = {actual_balance*self.daily_loss_limit:,.0f} CZK (from config)")
 
             self._balance_detection_attempted = True
 
@@ -134,6 +164,17 @@ class RiskManager:
             
             # Get risk parameters
             risk_pct = self.max_risk_per_trade  # 0.005 = 0.5%
+            
+            # PHASE 2: Apply drawdown-based risk reduction
+            if self.drawdown_reduction_enabled:
+                current_drawdown_pct = self._calculate_current_drawdown()
+                risk_adjustment = self._get_drawdown_risk_adjustment(current_drawdown_pct)
+                risk_pct = risk_pct * risk_adjustment
+                
+                if risk_adjustment < 1.0:
+                    logger.info(f"[RISK] Drawdown adjustment: {current_drawdown_pct*100:.1f}% drawdown → "
+                              f"risk reduced to {risk_pct*100:.2f}% (factor: {risk_adjustment:.2f})")
+            
             risk_amount_czk = self.account_balance * risk_pct
             
             # Get pip value (already per 1.0 lot)
@@ -410,8 +451,9 @@ class RiskManager:
             return None
         
     def add_position(self, position: PositionSize):
-        """Add position to tracking"""
-        self.open_positions.append(position)
+        """Add position to tracking (thread-safe)"""
+        with self._lock:
+            self.open_positions.append(position)
         
         # NOVÝ LOG - rozšířený
         total_risk = sum(p.risk_amount_czk for p in self.open_positions)
@@ -433,16 +475,17 @@ class RiskManager:
                         f"{total_risk_pct:.1f}%/{self.max_risk_total*100:.1f}%")
 
     def remove_position(self, symbol: str, pnl_czk: float = 0):
-        """Remove position and update daily PnL"""
-        # Najdi pozici pro log
-        removed_position = None
-        for p in self.open_positions:
-            if p.symbol == symbol:
-                removed_position = p
-                break
-        
-        self.open_positions = [p for p in self.open_positions if p.symbol != symbol]
-        self.daily_pnl += pnl_czk
+        """Remove position and update daily PnL (thread-safe)"""
+        with self._lock:
+            # Najdi pozici pro log
+            removed_position = None
+            for p in self.open_positions:
+                if p.symbol == symbol:
+                    removed_position = p
+                    break
+            
+            self.open_positions = [p for p in self.open_positions if p.symbol != symbol]
+            self.daily_pnl += pnl_czk
         
         # ROZŠÍŘENÝ LOG
         if removed_position:
@@ -495,6 +538,15 @@ class RiskManager:
         # Calculate totals using current balance
         current_balance = (self.balance_tracker.get_current_balance()
                           if self.balance_tracker else self.account_balance)
+        
+        # PHASE 2: Update equity high for drawdown calculation
+        current_equity = current_balance
+        if self.balance_tracker and hasattr(self.balance_tracker, 'unrealized_pnl'):
+            current_equity = current_balance + (self.balance_tracker.unrealized_pnl or 0)
+        
+        if current_equity > self.equity_high:
+            self.equity_high = current_equity
+            logger.debug(f"[RISK] New equity high: {self.equity_high:,.0f} CZK")
 
         total_risk_czk = sum(p.risk_amount_czk for p in self.open_positions)
         total_risk_pct = (total_risk_czk / current_balance) * 100
@@ -893,3 +945,64 @@ class RiskManager:
         except Exception as e:
             logger.error(f"[RISK] Error calculating swing buffer: {e}")
             return 20.0  # Safe fallback
+    
+    def _calculate_current_drawdown(self) -> float:
+        """
+        Calculate current drawdown percentage from equity high
+        
+        Returns:
+            Drawdown as decimal (0.10 = 10% drawdown)
+        """
+        if not self.drawdown_reduction_enabled:
+            return 0.0
+        
+        current_balance = (self.balance_tracker.get_current_balance()
+                          if self.balance_tracker else self.account_balance)
+        
+        # Include unrealized PnL in equity calculation
+        current_equity = current_balance
+        if self.balance_tracker and hasattr(self.balance_tracker, 'unrealized_pnl'):
+            current_equity = current_balance + (self.balance_tracker.unrealized_pnl or 0)
+        
+        if self.equity_high <= 0:
+            return 0.0
+        
+        if current_equity > self.equity_high:
+            self.equity_high = current_equity
+            return 0.0
+        
+        drawdown = (self.equity_high - current_equity) / self.equity_high
+        return max(0.0, drawdown)
+    
+    def _get_drawdown_risk_adjustment(self, drawdown_pct: float) -> float:
+        """
+        Get risk adjustment factor based on current drawdown
+        
+        Args:
+            drawdown_pct: Current drawdown as decimal (0.10 = 10%)
+            
+        Returns:
+            Risk adjustment factor (1.0 = no change, 0.5 = half risk)
+        """
+        if not self.drawdown_reduction_enabled:
+            return 1.0
+        
+        # If drawdown exceeds threshold, reduce risk
+        if drawdown_pct >= self.drawdown_threshold_pct:
+            logger.warning(f"[RISK] Drawdown {drawdown_pct*100:.1f}% >= threshold {self.drawdown_threshold_pct*100:.1f}% - "
+                          f"applying risk reduction factor {self.risk_reduction_factor:.2f}")
+            return self.risk_reduction_factor
+        
+        # If drawdown below recovery threshold, return to normal
+        if drawdown_pct <= self.recovery_threshold_pct:
+            return 1.0
+        
+        # Linear interpolation between recovery and threshold
+        # At recovery_threshold: factor = 1.0
+        # At drawdown_threshold: factor = risk_reduction_factor
+        if self.drawdown_threshold_pct > self.recovery_threshold_pct:
+            ratio = (drawdown_pct - self.recovery_threshold_pct) / (self.drawdown_threshold_pct - self.recovery_threshold_pct)
+            factor = 1.0 - (ratio * (1.0 - self.risk_reduction_factor))
+            return max(self.risk_reduction_factor, min(1.0, factor))
+        
+        return 1.0

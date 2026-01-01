@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 import asyncio
 from .position_closer import PositionCloser
+from .logging_config import LoggingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +53,19 @@ class SimpleOrderExecutor:
         self.edge = edge_detector  # Store for context extraction
         self.hass = hass_instance  # Store hass instance for notifications
 
+        # Initialize logging config
+        logging_config = self.config.get('logging', {})
+        self.logging = LoggingConfig(logging_config)
+        
         # Initialize trade decision logger
         from .trade_decision_logger import TradeDecisionLogger
         self.trade_logger = TradeDecisionLogger()
 
         # Initialize position closer for close & reverse feature
-        self.position_closer = PositionCloser(ctrader_client, create_task_fn)
-        logger.info("[ORDER_EXECUTOR] PositionCloser initialized - close & reverse feature enabled")
+        # CRITICAL FIX: Pass run_in_fn to avoid blocking time.sleep()
+        run_in_fn = hass_instance.run_in if hass_instance else None
+        self.position_closer = PositionCloser(ctrader_client, create_task_fn, run_in_fn)
+        logger.info("[ORDER_EXECUTOR] PositionCloser initialized - close & reverse feature enabled (non-blocking)")
 
         # Register for execution events to track position lifecycle
         if self.ctrader_client and hasattr(self.ctrader_client, 'add_execution_callback'):
@@ -552,19 +559,30 @@ class SimpleOrderExecutor:
 
                     # Build context from signal data (not from EdgeDetector attributes)
                     context = {
-                        'regime': signal.get('regime', 'UNKNOWN'),
+                        'regime': signal.get('regime_state', signal.get('regime', 'UNKNOWN')),
+                        'trend_direction': signal.get('swing_trend', 'UNKNOWN'),
                         'adx': signal.get('adx', 0),
                         'current_balance': self.balance_tracker.get_current_balance(),
                         'last_swing_high': signal.get('last_swing_high'),
                         'last_swing_low': signal.get('last_swing_low')
                     }
                     self.trade_logger.log_trade(signal, enhanced_execution, context)
+                    
+                    # Detailed position log for fine-tuning (if logging enabled)
+                    if hasattr(self, 'logging') and self.logging:
+                        position_log = self.logging.format_position_log(signal, enhanced_execution, context)
+                        logger.info(position_log)
                 except Exception as log_error:
                     logger.warning(f"[ORDER_EXECUTOR] Failed to log trade decision: {log_error}")
 
-                logger.info(f"[ORDER_EXECUTOR] ✅ Order executed successfully!")
-                logger.info(f"  Position ID: {execution_result.get('position_id')}")
-                logger.info(f"  Actual entry: {execution_result.get('actual_entry_price')}")
+                # Detailed position log for fine-tuning
+                if hasattr(self, 'logging') and self.logging:
+                    position_log = self.logging.format_position_log(signal, enhanced_execution, context)
+                    logger.info(position_log)
+                else:
+                    logger.info(f"[ORDER_EXECUTOR] ✅ Order executed successfully!")
+                    logger.info(f"  Position ID: {execution_result.get('position_id')}")
+                    logger.info(f"  Actual entry: {execution_result.get('actual_entry_price')}")
 
                 # Get position data from risk_manager or pending_order
                 position_data = self._get_current_position_data(symbol)
@@ -895,11 +913,10 @@ class SimpleOrderExecutor:
                 logger.error("[ORDER_EXECUTOR] No running event loop found")
                 return False
             
-            # Wait for completion (max 5 seconds)
-            for i in range(50):  # 5 seconds, check every 0.1s
-                if results['completed']:
-                    break
-                time.sleep(0.1)
+            # CRITICAL FIX: Remove time.sleep() - task will complete asynchronously
+            # We can't use await here because this is a sync function
+            # The async task will complete in the background
+            logger.debug("[ORDER_EXECUTOR] Order send task created, will complete asynchronously")
             
             if results['error']:
                 logger.error(f"[ORDER_EXECUTOR] Order failed: {results['error']}")

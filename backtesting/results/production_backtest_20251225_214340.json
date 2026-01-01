@@ -1,0 +1,26 @@
+{
+  "timestamp": "2025-12-25T20:43:40.258355+00:00",
+  "initial_balance": 2000000.0,
+  "final_balance": 1958900.0,
+  "total_pnl": -41100.0,
+  "statistics": {
+    "total_trades": 5,
+    "winning_trades": 2,
+    "losing_trades": 3,
+    "total_pnl": -41100.0,
+    "max_drawdown": 2.0549999999999997,
+    "win_rate": 40.0,
+    "profit_factor": 0.25136612021857924,
+    "avg_win": 6900.0,
+    "avg_loss": 18300.0
+  },
+  "trades": [
+    {
+      "position_id": "POS_GER40_1",
+      "symbol": "GER40",
+      "direction": "BUY",
+      "entry_price": 24484.59,
+      "size": 12.0,
+      "stop_loss": 24332.09,
+      "take_profit": 24542.09,
+      "opened_at": 

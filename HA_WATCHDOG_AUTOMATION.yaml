@@ -1,0 +1,74 @@
+# Home Assistant Automation - Trading Watchdog Alert
+# 
+# CRITICAL SAFETY FEATURE: Monitors if trading bot is alive
+# If watchdog doesn't update for 3 minutes, triggers alert and optionally kill switch
+#
+# INSTALLATION:
+# 1. Copy this to your Home Assistant configuration/automations.yaml
+# 2. Or add to configuration.yaml under "automation:"
+# 3. Restart Home Assistant
+
+automation:
+  - alias: "Trading Watchdog Alert"
+    description: "Alert when trading bot stops responding (watchdog timeout)"
+    trigger:
+      - platform: state
+        entity_id: input_boolean.trading_watchdog
+        to: 'off'
+        for:
+          minutes: 3
+      - platform: state
+        entity_id: input_boolean.trading_watchdog
+        to: 'on'
+        for:
+          minutes: 3
+    condition:
+      # Only trigger if watchdog hasn't changed for 3+ minutes
+      - condition: template
+        value_template: >
+          {{ (as_timestamp(now()) - as_timestamp(states('input_boolean.trading_watchdog').last_changed)) > 180 }}
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "🚨 TRADING BOT DOWN!"
+          message: "Trading bot watchdog timeout - bot hasn't updated for 3+ minutes. Check immediately!"
+          data:
+            priority: high
+            channel: critical_alerts
+      
+      # Optional: Activate kill switch
+      - condition: template
+        value_template: "{{ states('input_boolean.trading_kill_switch_enabled') == 'on' }}"
+      - service: input_boolean.turn_on
+        entity_id: input_boolean.trading_kill_switch
+      - service: notify.mobile_app
+        data:
+          title: "🛑 KILL SWITCH ACTIVATED"
+          message: "Trading kill switch activated due to watchdog timeout"
+          data:
+            priority: critical
+            channel: critical_alerts
+
+  # Optional: Kill Switch Handler (closes all positions)
+  - alias: "Trading Kill Switch Handler"
+    description: "Close all positions when kill switch is activated"
+    trigger:
+      - platform: state
+        entity_id: input_boolean.trading_kill_switch
+        to: 'on'
+    condition:
+      - condition: state
+        entity_id: input_boolean.auto_trading_enabled
+        state: 'on'
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "🛑 KILL SWITCH: Closing All Positions"
+          message: "Kill switch activated - all positions will be closed"
+          data:
+            priority: critical
+      
+      # Note: Actual position closing should be handled by trading bot
+      # listening to input_boolean.trading_kill_switch state change
+      # This automation just sends notification
+

@@ -1,0 +1,156 @@
+# Backtest Configuration - Velmi relaxované prahy pro maximum signálů
+# Pro analýzu a optimalizaci
+
+edges:
+  min_signal_quality: 50  # ↓↓ Z 75 na 50
+  min_confidence: 60      # ↓↓ Z 80 na 60
+  min_rrr: 1.2           # ↓↓ Z 2.0 na 1.2
+  min_bars_between_signals: 3  # ↓↓ Z 12 na 3 (15 min)
+  
+  # Ostatní parametry zůstávají
+  swing_lookback: 30
+  recent_swing_bars: 10
+  weight_recent_swings: false
+  atr_factor_sl: 0.3
+  atr_factor_tp_min: 1.8
+  atr_factor_tp_standard: 2.0
+  fallback_atr: 20.0
+  use_dynamic_stops: true
+  min_rrr_for_wide: 1.5
+  target_rrr_wide: 2.0
+  standard_rrr: 2.5
+  max_rrr: 3.5
+  min_swing_quality: 40  # ↓ Z 50
+  pin_bar_ratio: 0.3
+  engulfing_min_size: 0.9
+  momentum_threshold_atr: 0.8
+  swing_break_lookback: 10
+  pivot_interference_buffer_atr: 0.15
+  pivot_interference_quality_penalty: -15
+  pivot_interference_min_rrr: 1.2
+  tick_size: 0.5
+  require_regime_alignment: false
+  strict_regime_filter: false  # ← Vypnout STRICT regime filter
+  check_spread: true
+  max_spread_multiplier: 2.0
+
+# Regime Detection - Velmi relaxované
+regime:
+  adx_period: 14
+  adx_threshold: 18      # ↓↓ Z 25 na 18
+  adx_hi: 28
+  adx_lo: 22
+  regression_period: 20
+  regression_r2_threshold: 0.4  # ↓↓ Z 0.6 na 0.4
+  enable_hurst: false
+
+# Microstructure - Vypnout většinu filtrů
+microstructure:
+  lookback_days: 20
+  z_score_threshold: 2.0
+  or_duration_minutes: 30
+  min_liquidity_score: 0.0  # ← Vypnout liquidity filter
+  vwap_confluence_distance: 0.3
+  volume_zscore_threshold: 1.0  # ↓ Z 1.5
+  use_time_filter: false
+  orb_weight: 1.1
+  progressive_or_updates: true
+  orb_signal_generation: true
+
+# Swings - Relaxované
+swings:
+  atr_multiplier_m1: 0.5
+  atr_multiplier_m5: 0.5
+  atr_multiplier_m15: 1.5
+  min_bars_between: 2
+  min_swing_quality: 15  # ↓ Z 20
+  atr_period: 14
+  use_pivot_validation: true
+  pivot_confluence_atr: 0.3
+  pivot_validation_weight: 1.2
+
+# Pivots - Stejné
+pivots:
+  pivot_tolerance_atr: 0.30
+  use_weekly_pivots: false
+
+# Risk Management - Stejné
+account_balance: 2000000
+account_currency: CZK
+base_risk_per_trade: 0.005
+max_risk_total: 0.03
+max_positions: 1
+daily_loss_limit: 0.02
+max_margin_usage: 0.80
+
+use_wide_stops: true
+target_position_lots: 12.0
+min_position_lots: 8.0
+max_position_lots: 20.0
+
+# Symbol specs - Stejné jako apps.yaml
+symbol_specs:
+  DAX:
+    min_lot: 0.01
+    max_lot: 20.0
+    lot_step: 0.01
+    pip_value_per_lot: 0.24
+    margin_per_lot: 29062
+    commission_per_lot: 4.20
+    pip_position: 2
+    sl_anchor_pips: 4000
+    sl_band_pct: 0.25
+    tp_rr_target: 2.0
+    tp_band_pct: 0.25
+    min_sl_points: 150.0
+    max_sl_points: 300.0
+    optimal_sl_points: 200.0
+    swing_buffer_points: 15.0
+    pivot_close_atr: 0.2
+    pivot_far_atr: 0.8
+    round_close_atr: 0.1
+    round_medium_atr: 0.05
+    max_spread_pips: 15.0
+    target_position_lots: 12.0
+    max_intraday_tp_points: 50.0
+
+  NASDAQ:
+    min_lot: 0.01
+    max_lot: 20.0
+    lot_step: 0.01
+    pip_value_per_lot: 0.20
+    margin_per_lot: 24530
+    commission_per_lot: 4.20
+    pip_position: 2
+    sl_anchor_pips: 5000
+    sl_band_pct: 0.25
+    tp_rr_target: 2.0
+    tp_band_pct: 0.25
+    min_sl_points: 200.0
+    max_sl_points: 400.0
+    optimal_sl_points: 250.0
+    swing_buffer_points: 20.0
+    pivot_close_atr: 0.2
+    pivot_far_atr: 0.8
+    round_close_atr: 0.1
+    round_medium_atr: 0.05
+    max_spread_pips: 20.0
+    target_position_lots: 10.0
+    max_intraday_tp_points: 60.0
+
+risk_adjustments:
+  quality_80_plus: 1.2
+  quality_50_80: 1.0
+  quality_below_50: 0.7
+
+regime_adjustments:
+  TREND: 1.0
+  RANGE: 0.7
+  UNKNOWN: 0.5
+
+volatility_adjustments:
+  low_atr_threshold: 10.0
+  low_atr_multiplier: 1.1
+  high_atr_threshold: 30.0
+  high_atr_multiplier: 0.8
+

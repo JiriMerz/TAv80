@@ -10,6 +10,7 @@ from enum import Enum
 from datetime import datetime, timezone
 import logging
 from .pullback_detector import PullbackDetector
+from .logging_config import LoggingConfig, LogLevel
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,10 @@ class EdgeDetector:
         self.main_config = self.config.get('main_config', {})
         self.timeframe = self.config.get('timeframe', 'M5')
         
+        # Initialize logging config
+        logging_config = self.main_config.get('logging', {})
+        self.logging = LoggingConfig(logging_config)
+        
         # Get all configuration parameters
         self.min_swing_quality = float(self.config.get('min_swing_quality', 30))
         
@@ -115,6 +120,8 @@ class EdgeDetector:
         self.default_confidence = self.config.get('default_confidence', 70)
         self.default_signal_quality = self.config.get('default_signal_quality', 75)
         self.require_regime_alignment = self.config.get('require_regime_alignment', False)
+        # STRICT regime filter - lze vypnout pro backtesting
+        self.strict_regime_filter = self.config.get('strict_regime_filter', True)  # Default: True (produkce)
         
         # Cooldown
         self.min_bars_between_signals = self.config.get('min_bars_between_signals', 3)
@@ -141,14 +148,20 @@ class EdgeDetector:
                       microstructure_data: Optional[Dict] = None) -> List[TradingSignal]:
         """Main signal detection method"""
         
+        current_bar_index = len(bars) - 1
+        current_price = bars[-1]['close'] if bars else 0
+        regime_type = regime_state.get('state', 'UNKNOWN')
+        
+        # Always log signal detection attempt
+        if self.app:
+            self.app.log(f"🔍 [SIGNAL_DETECT] Starting signal detection - bars={len(bars)}, price={current_price:.2f}, regime={regime_type}")
+        
         if len(bars) < 20:
             self._log_rejection("Insufficient bars for analysis", {
                 "bars_available": len(bars),
                 "minimum_required": 20
             })
             return []
-        
-        current_bar_index = len(bars) - 1
         
         # Check cooldown
         if current_bar_index - self._last_signal_bar_index < self.min_bars_between_signals:
@@ -165,6 +178,76 @@ class EdgeDetector:
         # Calculate ATR
         self.current_atr = self._calculate_atr(bars)
         
+        if self.app:
+            self.app.log(f"📊 [SIGNAL_DETECT] ATR={self.current_atr:.2f}, Cooldown OK, Bars OK")
+        
+        # === STRICT REGIME FILTER: REGIME MUSÍ BÝT TREND A EMA34 TAKÉ ===
+        # Oba musí souhlasit - regime TREND a EMA34 trend ve stejném směru
+        # Lze vypnout přes config: strict_regime_filter: false (pro backtesting)
+        if self.strict_regime_filter:
+            regime_type = regime_state.get('state', 'UNKNOWN')
+            regime_regime = regime_state.get('regime', regime_type)  # Fallback na 'state'
+            trend_direction = regime_state.get('trend_direction')
+            
+            # Kontrola EMA34 trendu
+            ema34_trend = self._get_ema34_trend(bars)
+            
+            # STRICT: Regime MUSÍ být TREND_UP nebo TREND_DOWN
+            regime_is_trend = (
+                regime_type.upper() in ['TREND_UP', 'TREND_DOWN'] or 
+                regime_regime.upper() in ['TREND_UP', 'TREND_DOWN']
+            )
+            
+            # STRICT: EMA34 MUSÍ ukazovat trend (UP nebo DOWN)
+            ema34_has_trend = ema34_trend and ema34_trend.upper() in ['UP', 'DOWN']
+            
+            # STRICT: Oba musí souhlasit ve směru
+            directions_match = False
+            if regime_is_trend and ema34_has_trend:
+                # Zkontrolovat, zda směry souhlasí
+                regime_direction = None
+                if regime_type.upper() == 'TREND_UP' or regime_regime.upper() == 'TREND_UP':
+                    regime_direction = 'UP'
+                elif regime_type.upper() == 'TREND_DOWN' or regime_regime.upper() == 'TREND_DOWN':
+                    regime_direction = 'DOWN'
+                elif trend_direction and trend_direction.upper() in ['UP', 'DOWN']:
+                    regime_direction = trend_direction.upper()
+                
+                if regime_direction and ema34_trend.upper() == regime_direction:
+                    directions_match = True
+            
+            # Povolit signály jen pokud OBA podmínky jsou splněny
+            rejection_reason = []  # Inicializovat před použitím
+            if not (regime_is_trend and ema34_has_trend and directions_match):
+                # Blokovat všechny signály
+                if not regime_is_trend:
+                    rejection_reason.append(f"Regime is not TREND (current: {regime_type}/{regime_regime})")
+                if not ema34_has_trend:
+                    rejection_reason.append(f"EMA34 does not show trend (current: {ema34_trend})")
+                if regime_is_trend and ema34_has_trend and not directions_match:
+                    rejection_reason.append(f"Directions don't match (regime: {trend_direction}, EMA34: {ema34_trend})")
+                
+                # Always log strict filter rejection (removed throttling for visibility)
+                if self.app:
+                    self.app.log(f"🚫 [STRICT_FILTER] BLOCKED: regime={regime_type}, EMA34={ema34_trend}, reasons={', '.join(rejection_reason)}")
+                
+                self._log_rejection("STRICT Regime filter: Both regime and EMA34 must be in TREND", {
+                    "regime_type": regime_type,
+                    "regime_regime": regime_regime,
+                    "trend_direction": trend_direction,
+                    "ema34_trend": ema34_trend,
+                    "regime_is_trend": regime_is_trend,
+                    "ema34_has_trend": ema34_has_trend,
+                    "directions_match": directions_match,
+                    "reasons": rejection_reason,
+                    "rule": "Signals only generated when BOTH regime=TREND AND EMA34=trend (same direction)"
+                })
+                return []
+            else:
+                # Strict filter prošel - logovat vždy
+                if self.app:
+                    self.app.log(f"✅ [STRICT_FILTER] PASSED: regime={regime_type}, EMA34={ema34_trend}, directions_match=True")
+        
         # Log what we're checking (periodically, not every bar)
         if self.app and (current_bar_index % 12 == 0):  # Every 12 bars = 1 hour on M5
             self._log_validation_summary(bars, regime_state, swing_state, microstructure_data)
@@ -175,6 +258,8 @@ class EdgeDetector:
             regime = regime_state.get('state', 'UNKNOWN')
             adx = regime_state.get('adx', 0)
             if not (regime == 'TREND' and adx > 25):
+                if self.app:
+                    self.app.log(f"🚫 [SWING_QUALITY] BLOCKED: {swing_quality:.1f}% < {self.min_swing_quality:.1f}%, regime={regime}, ADX={adx:.1f}")
                 self._log_rejection("Low swing quality", {
                     "current_swing_quality": f"{swing_quality:.1f}%",
                     "minimum_required": f"{self.min_swing_quality:.1f}%",
@@ -183,14 +268,23 @@ class EdgeDetector:
                     "trend_exception": f"Not strong trend (ADX > 25): {adx <= 25}"
                 })
                 return []
+        else:
+            # Swing quality OK - logovat vždy
+            if self.app:
+                self.app.log(f"✅ [SWING_QUALITY] PASSED: {swing_quality:.1f}% >= {self.min_swing_quality:.1f}%")
         
         # === PULLBACK DETECTION (Priority 1) ===
         # Check for high-quality pullback opportunities in strong trends
+        if self.app:
+            self.app.log(f"🔍 [PULLBACK_CHECK] Checking for pullback opportunities...")
+        
         pullback_opportunity = self.pullback_detector.detect_pullback_opportunity(
             bars, regime_state, swing_state, pivot_levels, microstructure_data
         )
         
         if pullback_opportunity:
+            if self.app:
+                self.app.log(f"✅ [PULLBACK] Opportunity found: {pullback_opportunity.get('pullback_type', 'UNKNOWN')}, quality={pullback_opportunity.get('quality_score', 0):.0f}%")
             # Convert pullback opportunity to trading signal
             pullback_signal = self._create_pullback_signal(pullback_opportunity, bars, regime_state)
             if pullback_signal:
@@ -210,10 +304,40 @@ class EdgeDetector:
         
         # === STANDARD PATTERN DETECTION (Priority 2) ===
         # Only if no pullback opportunity found
+        # V trendech: provést standardní detekci jen pokud jsme v pullback zóně
+        # V RANGE: také kontrolovat swing extrémy
+        
+        # === EMA(34) TREND CHECK - PŘED KONTROLOU PULLBACK ZÓNY ===
+        # Pokud regime říká RANGE, ale EMA34 ukazuje trend, použijeme EMA trend
+        trend_direction = regime_state.get('trend_direction')
+        ema34_trend = self._get_ema34_trend(bars)
+        if ema34_trend:
+            # Pokud regime říká RANGE/SIDEWAYS, ale EMA34 ukazuje trend → použijeme EMA trend
+            if not trend_direction or trend_direction.upper() in ['SIDEWAYS', 'RANGE']:
+                trend_direction = ema34_trend
+                if self.app:
+                    self.app.log(f"[TREND] Regime={regime_state.get('trend_direction', 'UNKNOWN')} but EMA34={ema34_trend} → Using EMA34 for pullback check")
+        
+        # Pokud jsme v trendu a nejsme v pullback zóně, přeskočit standardní detekci
+        if trend_direction and trend_direction.upper() in ['UP', 'DOWN']:
+            if not self._is_in_pullback_zone(bars, swing_state, trend_direction):
+                if self.app:
+                    self.app.log(f"⏭️ [PATTERN_DETECT] Skipping - not in pullback zone (trend: {trend_direction})")
+                return signals  # Vrátit prázdný seznam - žádné signály mimo pullback v trendu
+        
+        # V RANGE režimu kontroly swing extrémů proběhnou v _evaluate_confluence_wide_stops()
+        if self.app:
+            self.app.log(f"🔍 [PATTERN_DETECT] Checking for patterns and structure breaks...")
+        
         patterns = self._detect_patterns(bars, regime_state)
         
         # Check structure breaks
         structure_breaks = self._check_structure_breaks(bars, swing_state, pivot_levels)
+        
+        if self.app:
+            pattern_count = len(patterns) if patterns else 0
+            break_count = len(structure_breaks) if structure_breaks else 0
+            self.app.log(f"📊 [PATTERN_DETECT] Found {pattern_count} pattern(s), {break_count} structure break(s)")
         
         # Evaluate confluence
         if patterns or structure_breaks:
@@ -223,11 +347,45 @@ class EdgeDetector:
             )
             
             if signal:
+                # Always log signal quality check
+                if self.app:
+                    self.app.log(f"🔍 [SIGNAL_QUALITY] Signal generated: quality={signal.signal_quality:.1f}% (min: {self.min_signal_quality}%), confidence={signal.confidence:.1f}% (min: {self.min_confidence}%)")
+                
                 if signal.signal_quality >= self.min_signal_quality and \
                    signal.confidence >= self.min_confidence:
+                    if self.app:
+                        self.app.log(f"✅ [SIGNAL_GENERATED] Signal passed quality check: {signal.signal_type.value if hasattr(signal.signal_type, 'value') else str(signal.signal_type)} @ {signal.entry:.2f}")
                     signals.append(signal)
                     self.last_signal = signal
                     self._last_signal_bar_index = current_bar_index
+                else:
+                    # Logovat, proč byl signál odmítnut kvůli kvalitě
+                    reasons = []
+                    if signal.signal_quality < self.min_signal_quality:
+                        reasons.append(f"Quality {signal.signal_quality:.1f}% < {self.min_signal_quality}%")
+                    if signal.confidence < self.min_confidence:
+                        reasons.append(f"Confidence {signal.confidence:.1f}% < {self.min_confidence}%")
+                    if self.app:
+                        self.app.log(f"🚫 [SIGNAL_QUALITY] BLOCKED: {', '.join(reasons)}")
+                    if reasons:
+                        self._log_rejection("Signal quality/confidence below threshold", {
+                            "signal_quality": f"{signal.signal_quality:.1f}%",
+                            "min_signal_quality": f"{self.min_signal_quality}%",
+                            "signal_confidence": f"{signal.confidence:.1f}%",
+                            "min_confidence": f"{self.min_confidence}%",
+                            "reasons": ", ".join(reasons),
+                            "signal_type": signal.signal_type.value if hasattr(signal.signal_type, 'value') else str(signal.signal_type)
+                        })
+            else:
+                if self.app:
+                    self.app.log(f"🚫 [SIGNAL_GENERATED] No signal from confluence evaluation (patterns/structure breaks found but no valid signal)")
+        
+        # Summary log
+        if self.app:
+            if signals:
+                self.app.log(f"✅ [SIGNAL_DETECT] SUCCESS: {len(signals)} signal(s) generated")
+            else:
+                self.app.log(f"⏸️ [SIGNAL_DETECT] No signals generated (all filters passed but no valid signals)")
         
         return signals
     
@@ -456,7 +614,47 @@ class EdgeDetector:
         
         # Adjust RRR based on confidence
         pattern_count = len(patterns)
+        
+        # === FALSE BREAKOUT FILTER ===
+        # Pro samotné breakouts (ne retest) vyžadovat volume confirmation
+        # Retest je silnější, takže může projít i bez volume
+        validated_breaks = []
+        for sb in structure_breaks:
+            if 'RETEST' in sb.get('type', ''):
+                # Retest může projít i bez volume (je silnější)
+                validated_breaks.append(sb)
+            elif sb.get('validated', False):
+                # Samotný breakout musí mít volume confirmation
+                if microstructure_data:
+                    volume_zscore = microstructure_data.get('volume_zscore', 0)
+                    if volume_zscore >= 1.0:
+                        validated_breaks.append(sb)
+                        if self.app and self.logging.should_log('breakout', f"validated:{sb.get('type')}"):
+                            self.app.log(f"[BREAKOUT_VALIDATION] ✅ Breakout validated: {sb.get('type')} with volume zscore {volume_zscore:.2f}")
+                    else:
+                        if self.app and self.logging.should_log('breakout', f"low_volume:{sb.get('type')}"):
+                            self.app.log(f"[FALSE_BREAKOUT] ❌ Blocking breakout {sb.get('type')}: Low volume (zscore: {volume_zscore:.2f} < 1.0)")
+                else:
+                    # Bez microstructure data - blokovat (nebezpečné)
+                    if self.app and self.logging.should_log('breakout', f"no_microdata:{sb.get('type')}"):
+                        self.app.log(f"[FALSE_BREAKOUT] ❌ Blocking breakout {sb.get('type')}: No microstructure data for volume validation")
+            else:
+                # Nevalidovaný breakout - přidat (pro zpětnou kompatibilitu, ale s nižší confidence)
+                validated_breaks.append(sb)
+        
+        # Použít pouze validované breakouts
+        structure_breaks = validated_breaks
         structure_count = len(structure_breaks)
+        
+        # === BREAKOUT RETEST BONUS ===
+        # Retest po breakoutu je silnější signál - přidat bonus
+        retest_bonus = 0
+        for sb in structure_breaks:
+            if 'RETEST' in sb.get('type', ''):
+                retest_bonus += 15  # Retest je silnější než samotný breakout
+                if self.app and self.logging.should_log('breakout', f"retest:{sb.get('type')}"):
+                    self.app.log(f"[BREAKOUT_RETEST] ✅ Retest detected: {sb.get('type')} at {sb.get('level', 0):.1f}")
+        
         total_signals = pattern_count + structure_count
         
         if total_signals >= 3:
@@ -479,6 +677,25 @@ class EdgeDetector:
         trend_direction = regime_state.get('trend_direction')
         regime_type = regime_state.get('state', 'UNKNOWN')
         adx_value = regime_state.get('adx', 0)
+        
+        # === EMA(34) TREND CHECK - PRIORITA PRO RANGE REŽIM ===
+        # Pokud regime detekuje RANGE, ale EMA34 ukazuje jasný trend, použijeme EMA trend
+        # EMA34 je spolehlivější pro detekci aktuálního trendu než regime detector
+        ema34_trend = self._get_ema34_trend(bars)
+        if ema34_trend:
+            # Pokud regime říká RANGE/SIDEWAYS, ale EMA34 ukazuje trend → použijeme EMA trend
+            # To je důležité, protože regime detector může být příliš konzervativní
+            if not trend_direction or trend_direction.upper() in ['SIDEWAYS', 'RANGE']:
+                # Regime říká RANGE/SIDEWAYS, ale EMA34 ukazuje jasný trend → použijeme EMA trend
+                trend_direction = ema34_trend
+                if self.app:
+                    self.app.log(f"[TREND] Regime={regime_state.get('trend_direction', 'UNKNOWN')} but EMA34={ema34_trend} → Using EMA34 trend as primary")
+            elif trend_direction and trend_direction.upper() in ['UP', 'DOWN'] and trend_direction.upper() != ema34_trend:
+                # Konflikt mezi regime trendem (UP/DOWN) a EMA trendem
+                # Preferujeme EMA trend jako primární (je aktuálnější a spolehlivější)
+                if self.app:
+                    self.app.log(f"[TREND] ⚠️ Trend conflict: Regime={trend_direction}, EMA34={ema34_trend} - using EMA34 as primary")
+                trend_direction = ema34_trend
         
         # Determine signal direction based on pattern count
         signal_wants_buy = bullish_count > bearish_count
@@ -512,9 +729,75 @@ class EdgeDetector:
                     "reason": "Only trend-following entries allowed (no counter-trend)"
                 })
                 return None
-            # If we get here, signal is in trend direction - ALLOW (including pullbacks)
-        
-        # If trend_direction is SIDEWAYS or None, allow both directions (range trading)
+            
+            # === BLOCK SIGNALS AT SWING EXTREMES IN TRENDS ===
+            # V trendech generujeme signály jen na pullbacku, ne na vrcholu swingu
+            if self._is_at_swing_extreme(bars, swing_state, trend_direction):
+                self._log_rejection("Trend filter: Signal at swing extreme (pullback required)", {
+                    "signal_direction": "BUY" if signal_wants_buy else "SELL",
+                    "trend_direction": trend_direction,
+                    "regime_type": regime_type,
+                    "adx": adx_value,
+                    "reason": "In trends, signals only allowed on pullbacks, not at swing extremes",
+                    "swing_state": {
+                        "last_high": swing_state.get('last_high'),
+                        "last_low": swing_state.get('last_low')
+                    }
+                })
+                return None
+            
+            # === REQUIRE PULLBACK ZONE FOR TREND SIGNALS ===
+            # Zkontrolujeme, zda je cena v pullback zóně (ne na vrcholu)
+            if not self._is_in_pullback_zone(bars, swing_state, trend_direction):
+                self._log_rejection("Trend filter: Signal not in pullback zone", {
+                    "signal_direction": "BUY" if signal_wants_buy else "SELL",
+                    "trend_direction": trend_direction,
+                    "regime_type": regime_type,
+                    "current_price": current_price,
+                    "reason": "In trends, signals only allowed in pullback zones",
+                    "swing_state": {
+                        "last_high": swing_state.get('last_high'),
+                        "last_low": swing_state.get('last_low')
+                    }
+                })
+                return None
+            
+            # If we get here, signal is in trend direction and in pullback zone - ALLOW
+        else:
+            # === RANGE/SIDEWAYS: Still block signals at swing extremes ===
+            # I v RANGE režimu nechceme vstupovat na swing extrémech
+            # Pro BUY: blokovat pokud je na swing high
+            # Pro SELL: blokovat pokud je na swing low
+            if signal_wants_buy:
+                # BUY signál v RANGE - blokovat pokud je na swing high
+                if self._is_at_swing_extreme_for_range(bars, swing_state, 'BUY'):
+                    self._log_rejection("Range filter: BUY signal at swing high (extreme blocked)", {
+                        "signal_direction": "BUY",
+                        "regime_type": regime_type,
+                        "adx": adx_value,
+                        "current_price": current_price,
+                        "reason": "In range markets, BUY signals blocked at swing highs",
+                        "swing_state": {
+                            "last_high": swing_state.get('last_high'),
+                            "last_low": swing_state.get('last_low')
+                        }
+                    })
+                    return None
+            elif signal_wants_sell:
+                # SELL signál v RANGE - blokovat pokud je na swing low
+                if self._is_at_swing_extreme_for_range(bars, swing_state, 'SELL'):
+                    self._log_rejection("Range filter: SELL signal at swing low (extreme blocked)", {
+                        "signal_direction": "SELL",
+                        "regime_type": regime_type,
+                        "adx": adx_value,
+                        "current_price": current_price,
+                        "reason": "In range markets, SELL signals blocked at swing lows",
+                        "swing_state": {
+                            "last_high": swing_state.get('last_high'),
+                            "last_low": swing_state.get('last_low')
+                        }
+                    })
+                    return None
         
         # === SET FINAL LEVELS ===
         
@@ -524,14 +807,28 @@ class EdgeDetector:
             stop_loss = entry - sl_distance
             take_profit = entry + tp_distance
             
-            # Optional: Adjust TP to pivot level if close
+            # Optional: Adjust TP to pivot level if close (prioritize R2, then R1)
             if pivot_levels:
+                # Try R2 first (stronger level)
+                r2 = pivot_levels.get('r2', 0)
                 r1 = pivot_levels.get('r1', 0)
-                if r1 and r1 > entry:
+                
+                # Check R2 first
+                if r2 and r2 > entry:
+                    distance_to_r2 = r2 - entry
+                    if distance_to_r2 > sl_distance * 1.5 and distance_to_r2 < tp_distance * 1.5:
+                        take_profit = r2 - (atr * 0.1)  # Just before R2
+                        tp_distance = take_profit - entry
+                        if self.app:
+                            self.app.log(f"[PIVOT_TP] Adjusted TP to R2: {take_profit:.2f} (distance: {distance_to_r2:.2f})")
+                # Fallback to R1 if R2 is too far or not available
+                elif r1 and r1 > entry:
                     distance_to_r1 = r1 - entry
-                    if distance_to_r1 > sl_distance * 1.5 and distance_to_r1 < tp_distance:
+                    if distance_to_r1 > sl_distance * 1.5 and distance_to_r1 < tp_distance * 1.5:
                         take_profit = r1 - (atr * 0.1)  # Just before R1
                         tp_distance = take_profit - entry
+                        if self.app:
+                            self.app.log(f"[PIVOT_TP] Adjusted TP to R1: {take_profit:.2f} (distance: {distance_to_r1:.2f})")
                         
         else:  # SELL SIGNAL
             signal_type = SignalType.SELL
@@ -539,20 +836,61 @@ class EdgeDetector:
             stop_loss = entry + sl_distance
             take_profit = entry - tp_distance
             
-            # Optional: Adjust TP to pivot level if close
+            # Optional: Adjust TP to pivot level if close (prioritize S2, then S1)
             if pivot_levels:
+                # Try S2 first (stronger level)
+                s2 = pivot_levels.get('s2', 0)
                 s1 = pivot_levels.get('s1', 0)
-                if s1 and s1 < entry:
+                
+                # Check S2 first
+                if s2 and s2 < entry:
+                    distance_to_s2 = entry - s2
+                    if distance_to_s2 > sl_distance * 1.5 and distance_to_s2 < tp_distance * 1.5:
+                        take_profit = s2 + (atr * 0.1)  # Just after S2
+                        tp_distance = entry - take_profit
+                        if self.app:
+                            self.app.log(f"[PIVOT_TP] Adjusted TP to S2: {take_profit:.2f} (distance: {distance_to_s2:.2f})")
+                # Fallback to S1 if S2 is too far or not available
+                elif s1 and s1 < entry:
                     distance_to_s1 = entry - s1
-                    if distance_to_s1 > sl_distance * 1.5 and distance_to_s1 < tp_distance:
+                    if distance_to_s1 > sl_distance * 1.5 and distance_to_s1 < tp_distance * 1.5:
                         take_profit = s1 + (atr * 0.1)  # Just after S1
                         tp_distance = entry - take_profit
+                        if self.app:
+                            self.app.log(f"[PIVOT_TP] Adjusted TP to S1: {take_profit:.2f} (distance: {distance_to_s1:.2f})")
 
         # === CALCULATE INITIAL QUALITY SCORE ===
         signal_quality = 60  # Base quality
         swing_quality_score = swing_state.get('quality', 50)
         if swing_quality_score > 60:
             signal_quality += 15
+        
+        # === PIVOT CONFLUENCE BONUS ===
+        # Pivot pointy jsou velmi významné úrovně - přidat bonus pokud je cena blízko
+        if pivot_levels:
+            pivot_confluence_bonus = 0
+            current_price = bars[-1]['close']
+            tolerance = atr * 0.3  # 0.3 ATR tolerance pro pivot confluence
+            
+            # Zkontrolovat, zda je cena blízko nějakého pivot pointu
+            for level_name, level_price in pivot_levels.items():
+                if isinstance(level_price, (int, float)) and level_price > 0:
+                    distance = abs(current_price - level_price)
+                    if distance <= tolerance:
+                        # Pivot pointy mají různou váhu podle významnosti
+                        if level_name.upper() == 'PIVOT':
+                            pivot_confluence_bonus += 20  # Pivot je nejvýznamnější
+                        elif level_name.upper() in ['R1', 'S1']:
+                            pivot_confluence_bonus += 15  # R1/S1 jsou silné
+                        elif level_name.upper() in ['R2', 'S2']:
+                            pivot_confluence_bonus += 10  # R2/S2 jsou střední
+                        else:
+                            pivot_confluence_bonus += 8  # Ostatní pivoty
+            
+            if pivot_confluence_bonus > 0:
+                signal_quality += pivot_confluence_bonus
+                if self.app:
+                    self.app.log(f"[PIVOT_CONFLUENCE] ✅ Price near pivot level, +{pivot_confluence_bonus} quality bonus")
 
         # === CALCULATE METRICS ===
 
@@ -560,11 +898,12 @@ class EdgeDetector:
         tp_pips = tp_distance * 100  # FIXED: 1 point = 100 pips for DAX/NASDAQ
         rrr = tp_distance / sl_distance if sl_distance > 0 else 0
 
-        # Validate minimum RRR (initial check)
-        if rrr < 1.5:
+        # Validate minimum RRR (initial check) - PHASE 1: Use config value
+        min_rrr_required = self.min_rr_ratio  # From config (2.0 after PHASE 1)
+        if rrr < min_rrr_required:
             self._log_rejection("Risk/Reward ratio too low", {
                 "calculated_rrr": f"{rrr:.2f}",
-                "minimum_required": "1.50",
+                "minimum_required": f"{min_rrr_required:.2f}",
                 "sl_distance": f"{sl_distance:.1f}",
                 "tp_distance": f"{tp_distance:.1f}",
                 "entry_price": f"{entry:.1f}",
@@ -634,6 +973,9 @@ class EdgeDetector:
         # Add RRR bonus
         if rrr >= 2.0:
             signal_quality += 10
+        
+        # Add retest bonus (if applicable)
+        signal_quality += retest_bonus
         
         # === MICROSTRUCTURE ENHANCEMENTS ===
         micro_bonus_conf = 0
@@ -716,6 +1058,21 @@ class EdgeDetector:
             else:
                 self.app.log(f"   • No structure breaks")
             
+            # Pivot levels
+            self.app.log(f"📊 PIVOT LEVELS:")
+            if pivot_levels:
+                current_price = bars[-1]['close']
+                atr = self.current_atr
+                tolerance = atr * 0.3
+                for level_name, level_price in pivot_levels.items():
+                    if isinstance(level_price, (int, float)) and level_price > 0:
+                        distance = abs(current_price - level_price)
+                        distance_atr = distance / atr if atr > 0 else 999
+                        status = "✅ NEAR" if distance <= tolerance else "   "
+                        self.app.log(f"   {status} {level_name}: {level_price:.2f} (distance: {distance:.2f} = {distance_atr:.2f} ATR)")
+            else:
+                self.app.log(f"   • No pivot levels available")
+            
             # Microstructure bonuses
             self.app.log(f"🔬 MICROSTRUCTURE BONUSES:")
             self.app.log(f"   • Confidence Bonus: +{micro_bonus_conf}%")
@@ -771,6 +1128,17 @@ class EdgeDetector:
     def _log_rejection(self, reason: str, details: Dict = None):
         """Log why a signal was rejected with comprehensive diagnostics"""
         if not self.app:
+            return
+        
+        # Check if should log based on log level and throttling
+        message_key = f"{reason}:{str(details.get('regime_type', ''))}:{str(details.get('signal_direction', ''))}"
+        
+        # === BYPASS THROTTLING FOR STRICT REGIME FILTER ===
+        # Always log strict regime filter rejections (critical for debugging)
+        if "STRICT Regime filter" in reason:
+            # Always log - bypass throttling
+            pass  # Continue to log
+        elif not self.logging.should_log('rejection', message_key):
             return
             
         self.app.log("─" * 60)
@@ -942,10 +1310,572 @@ class EdgeDetector:
         return (bar['high'] <= prev_bar['high'] and 
                 bar['low'] >= prev_bar['low'])
     
+    def _get_ema34_trend(self, bars: List[Dict]) -> Optional[str]:
+        """
+        Získá trend směr pomocí EMA(34)
+        
+        Args:
+            bars: OHLC data
+            
+        Returns:
+            'UP' pokud cena > EMA(34), 'DOWN' pokud cena < EMA(34), None pokud nedostatek dat
+        """
+        if len(bars) < 34:
+            if self.app and hasattr(self, '_ema34_debug_count'):
+                self._ema34_debug_count = getattr(self, '_ema34_debug_count', 0) + 1
+                if self._ema34_debug_count % 100 == 0:
+                    self.app.log(f"[EMA34] Insufficient bars: {len(bars)} < 34")
+            return None
+            
+        try:
+            # Vypočítat EMA(34)
+            ema34 = self._calculate_ema(bars, 34)
+            if ema34 == 0 or ema34 is None:
+                if self.app and hasattr(self, '_ema34_zero_count'):
+                    self._ema34_zero_count = getattr(self, '_ema34_zero_count', 0) + 1
+                    if self._ema34_zero_count % 100 == 0:
+                        self.app.log(f"[EMA34] EMA34 calculation returned 0 or None (bars: {len(bars)})")
+                return None
+                
+            current_price = bars[-1].get('close', 0)
+            if current_price == 0:
+                return None
+            
+            # Tolerance: 0.1% od EMA pro "exactly at EMA" situaci
+            tolerance = ema34 * 0.001
+            
+            # Debug: logovat občas pro diagnostiku
+            if self.app and hasattr(self, '_ema34_debug_logged'):
+                debug_count = getattr(self, '_ema34_debug_logged', 0)
+                if debug_count % 200 == 0:  # Každých 200 barů
+                    self.app.log(f"[EMA34 DEBUG] Price: {current_price:.2f}, EMA34: {ema34:.2f}, Diff: {abs(current_price - ema34):.2f}, Tolerance: {tolerance:.2f}")
+                self._ema34_debug_logged = debug_count + 1
+            else:
+                if self.app:
+                    self._ema34_debug_logged = 1
+            
+            if current_price > ema34 + tolerance:
+                result = 'UP'
+            elif current_price < ema34 - tolerance:
+                result = 'DOWN'
+            else:
+                # Cena je velmi blízko EMA34 - použít menší toleranci nebo rozhodnout podle momentum
+                # Pokud je cena přesně na EMA, použít momentum z posledních 2-3 barů
+                if len(bars) >= 3:
+                    recent_momentum = bars[-1]['close'] - bars[-3]['close']
+                    if recent_momentum > tolerance:
+                        result = 'UP'
+                    elif recent_momentum < -tolerance:
+                        result = 'DOWN'
+                    else:
+                        result = None  # Cena je na EMA a momentum je neutrální
+                else:
+                    result = None  # Cena je na EMA - trend nejasný
+            
+            return result
+                
+        except Exception as e:
+            if self.app:
+                self.app.log(f"[TREND] Error calculating EMA34 trend: {e}")
+                import traceback
+                self.app.log(traceback.format_exc())
+            return None
+    
+    def _calculate_ema(self, bars: List[Dict], period: int) -> float:
+        """
+        Vypočítá Exponential Moving Average
+        
+        Args:
+            bars: OHLC data
+            period: EMA period (např. 34)
+            
+        Returns:
+            EMA hodnota
+        """
+        if len(bars) < period:
+            return 0.0
+        
+        # Ověřit, že máme validní close hodnoty
+        closes = [bar.get('close', 0) for bar in bars[:period]]
+        if not closes or all(c == 0 for c in closes):
+            return 0.0
+            
+        # Multiplier pro EMA
+        multiplier = 2.0 / (period + 1.0)
+        
+        # Začneme s SMA (průměr z prvních 'period' barů)
+        sma_sum = sum(closes)
+        if sma_sum == 0:
+            return 0.0
+        ema = sma_sum / period
+        
+        # Aplikujeme EMA na zbývající bary
+        for bar in bars[period:]:
+            close = bar.get('close', 0)
+            if close > 0:
+                ema = (close * multiplier) + (ema * (1.0 - multiplier))
+            # Pokud close == 0, použijeme předchozí EMA (není ideální, ale lepší než 0)
+                
+        return ema
+    
+    def _calculate_rsi(self, bars: List[Dict], period: int = 14) -> float:
+        """
+        Vypočítá Relative Strength Index (RSI)
+        
+        Args:
+            bars: OHLC data
+            period: RSI period (default 14)
+            
+        Returns:
+            RSI hodnota (0-100)
+        """
+        if len(bars) < period + 1:
+            return 50.0  # Neutral RSI pokud nedostatek dat
+        
+        gains = []
+        losses = []
+        
+        # Vypočítat změny
+        for i in range(1, len(bars)):
+            change = bars[i].get('close', 0) - bars[i-1].get('close', 0)
+            if change > 0:
+                gains.append(change)
+                losses.append(0.0)
+            else:
+                gains.append(0.0)
+                losses.append(abs(change))
+        
+        if len(gains) < period:
+            return 50.0
+        
+        # Průměrný zisk a ztráta (Wilder's smoothing)
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        
+        if avg_loss == 0:
+            return 100.0  # Perfect uptrend
+        
+        # RSI calculation
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
+    
+    def _check_rsi_pullback_confirmation(self, bars: List[Dict], trend_direction: str) -> Tuple[bool, str]:
+        """
+        Zkontroluje, zda RSI potvrzuje pullback vstup
+        
+        Args:
+            bars: OHLC data
+            trend_direction: 'UP', 'DOWN', nebo 'SIDEWAYS'
+            
+        Returns:
+            Tuple (is_confirmed, reason)
+        """
+        rsi = self._calculate_rsi(bars, 14)
+        
+        if trend_direction == 'UP':
+            # V uptrendu: RSI by měl být 40-60 (zdravý pullback, ne oversold)
+            # Oversold (<30) může signalizovat slabost trendu
+            if rsi < 30:
+                return False, f"RSI too oversold ({rsi:.1f}) - possible weak trend"
+            if rsi > 70:
+                return False, f"RSI overbought ({rsi:.1f}) - not a pullback"
+            if 40 <= rsi <= 60:
+                return True, f"RSI in ideal pullback zone ({rsi:.1f})"
+            # RSI 30-40 nebo 60-70 je OK, ale ne ideální
+            return True, f"RSI acceptable ({rsi:.1f})"
+            
+        elif trend_direction == 'DOWN':
+            # V downtrendu: RSI by měl být 40-60 (zdravý pullback, ne overbought)
+            if rsi > 70:
+                return False, f"RSI too overbought ({rsi:.1f}) - possible weak trend"
+            if rsi < 30:
+                return False, f"RSI oversold ({rsi:.1f}) - not a pullback"
+            if 40 <= rsi <= 60:
+                return True, f"RSI in ideal pullback zone ({rsi:.1f})"
+            # RSI 30-40 nebo 60-70 je OK, ale ne ideální
+            return True, f"RSI acceptable ({rsi:.1f})"
+        
+        # SIDEWAYS - povolit
+        return True, f"RSI neutral ({rsi:.1f}) - sideways market"
+    
+    def _is_at_swing_extreme_for_range(self, bars: List[Dict], swing_state: Dict, signal_direction: str) -> bool:
+        """
+        Kontrola swing extrému pro RANGE režim
+        
+        Pro BUY: blokovat pokud je na swing high
+        Pro SELL: blokovat pokud je na swing low
+        
+        Args:
+            bars: OHLC data
+            swing_state: Swing state
+            signal_direction: 'BUY' nebo 'SELL'
+            
+        Returns:
+            True pokud je signál na swing extrému (měl by být blokován)
+        """
+        if len(bars) < 5:
+            return False
+            
+        current_price = bars[-1]['close']
+        current_high = bars[-1]['high']
+        current_low = bars[-1]['low']
+        
+        # Tolerance: 0.3 ATR od swing extreme
+        tolerance = self.current_atr * 0.3
+        
+        # Získáme swing high/low
+        last_high = swing_state.get('last_high')
+        last_low = swing_state.get('last_low')
+        
+        if last_high is None or last_low is None:
+            lookback = min(20, len(bars) - 2)
+            if lookback > 0:
+                recent_bars = bars[-lookback:-1]
+                if not last_high:
+                    last_high = max(b['high'] for b in recent_bars) if recent_bars else None
+                if not last_low:
+                    last_low = min(b['low'] for b in recent_bars) if recent_bars else None
+        
+        # Zpracování swing high/low
+        if isinstance(last_high, dict):
+            last_high_price = last_high.get('price')
+        else:
+            last_high_price = last_high
+            
+        if isinstance(last_low, dict):
+            last_low_price = last_low.get('price')
+        else:
+            last_low_price = last_low
+        
+        if signal_direction == 'BUY':
+            # BUY signál: blokovat pokud je na swing high
+            if last_high_price:
+                if current_high >= (last_high_price - tolerance):
+                    # Zkontrolujeme momentum
+                    if len(bars) >= 2:
+                        price_change = bars[-1]['close'] - bars[-2]['close']
+                        if price_change > 0:  # Cena roste
+                            if self.app:
+                                self.app.log(f"[RANGE_EXTREME] Blocking BUY: Price at/near swing high {last_high_price:.1f}")
+                            return True
+                            
+        elif signal_direction == 'SELL':
+            # SELL signál: blokovat pokud je na swing low
+            if last_low_price:
+                if current_low <= (last_low_price + tolerance):
+                    # Zkontrolujeme momentum
+                    if len(bars) >= 2:
+                        price_change = bars[-1]['close'] - bars[-2]['close']
+                        if price_change < 0:  # Cena klesá
+                            if self.app:
+                                self.app.log(f"[RANGE_EXTREME] Blocking SELL: Price at/near swing low {last_low_price:.1f}")
+                            return True
+        
+        return False
+    
+    def _is_at_swing_extreme(self, bars: List[Dict], swing_state: Dict, trend_direction: str) -> bool:
+        """
+        Zkontroluje, zda je aktuální cena na vrcholu swingu (blízko swing high/low)
+        
+        V trendech chceme generovat signály jen na pullbacku, ne na vrcholu swingu.
+        Kontroluje také EMA(34) trend pro dodatečnou validaci.
+        
+        Args:
+            bars: OHLC data
+            swing_state: Swing state s last_high a last_low
+            trend_direction: 'UP', 'DOWN', nebo 'SIDEWAYS'
+            
+        Returns:
+            True pokud je cena na vrcholu swingu (v rámci tolerance)
+        """
+        if not trend_direction or trend_direction.upper() in ['SIDEWAYS', 'RANGE']:
+            return False  # V range markets neblokujeme (ale měli bychom použít EMA34 trend)
+        
+        # DODATEČNÁ KONTROLA: EMA(34) trend
+        ema34_trend = self._get_ema34_trend(bars)
+        if ema34_trend and ema34_trend != trend_direction:
+            # EMA trend se liší od regime trendu - být přísnější
+            if self.app:
+                self.app.log(f"[SWING_EXTREME] EMA34 trend ({ema34_trend}) differs from regime trend ({trend_direction}) - using EMA")
+            trend_direction = ema34_trend  # Použijeme EMA trend
+            
+        if len(bars) < 5:
+            return False
+            
+        current_price = bars[-1]['close']
+        current_high = bars[-1]['high']
+        current_low = bars[-1]['low']
+        
+        # Tolerance: 0.3 ATR od swing extreme (přísnější)
+        tolerance = self.current_atr * 0.3
+        
+        # Získáme swing high/low z swing_state
+        last_high = swing_state.get('last_high')
+        last_low = swing_state.get('last_low')
+        
+        # Pokud nemáme swing data ze swing_state, zkusíme je najít z bars
+        if last_high is None or last_low is None:
+            lookback = min(20, len(bars) - 2)
+            if lookback > 0:
+                recent_bars = bars[-lookback:-1]  # Nezahrnujeme poslední bar
+                if not last_high:
+                    last_high = max(b['high'] for b in recent_bars) if recent_bars else None
+                if not last_low:
+                    last_low = min(b['low'] for b in recent_bars) if recent_bars else None
+        
+        # Zpracování swing high/low - mohou být dict nebo float
+        if isinstance(last_high, dict):
+            last_high_price = last_high.get('price')
+        else:
+            last_high_price = last_high
+            
+        if isinstance(last_low, dict):
+            last_low_price = last_low.get('price')
+        else:
+            last_low_price = last_low
+        
+        # KONTROLA 1: Zda cena právě vytváří nový swing high/low
+        # V uptrendu: pokud current_high je blízko nebo nad last_high → blokovat
+        if trend_direction == 'UP':
+            if last_high_price:
+                # Kontrola 1a: Current high je blízko nebo nad last high
+                if current_high >= (last_high_price - tolerance):
+                    # Kontrola 1b: Zkontrolujeme, zda poslední 2-3 bary ukazují růst (ne pullback)
+                    if len(bars) >= 3:
+                        recent_highs = [b['high'] for b in bars[-3:]]
+                        if all(h >= recent_highs[0] * 0.999 for h in recent_highs):  # Všechny bary jsou blízko high
+                            if self.app:
+                                self.app.log(f"[SWING_EXTREME] Blocking: Current high {current_high:.1f} near/above last high {last_high_price:.1f} (uptrend)")
+                            return True
+                    
+        # V downtrendu: pokud current_low je blízko nebo pod last_low → blokovat
+        elif trend_direction == 'DOWN':
+            if last_low_price:
+                # Kontrola 1a: Current low je blízko nebo pod last low
+                if current_low <= (last_low_price + tolerance):
+                    # Kontrola 1b: Zkontrolujeme, zda poslední 2-3 bary ukazují pokles (ne pullback)
+                    if len(bars) >= 3:
+                        recent_lows = [b['low'] for b in bars[-3:]]
+                        if all(l <= recent_lows[0] * 1.001 for l in recent_lows):  # Všechny bary jsou blízko low
+                            if self.app:
+                                self.app.log(f"[SWING_EXTREME] Blocking: Current low {current_low:.1f} near/below last low {last_low_price:.1f} (downtrend)")
+                            return True
+        
+        # KONTROLA 2: Zda cena je blízko swing extrému a pohybuje se směrem k němu (ne od něj)
+        if trend_direction == 'UP' and last_high_price:
+            distance_from_high = abs(current_price - last_high_price)
+            if distance_from_high <= tolerance:
+                # Zkontrolujeme momentum: pokud poslední 2 bary rostou → blokovat
+                if len(bars) >= 2:
+                    price_change = bars[-1]['close'] - bars[-2]['close']
+                    if price_change > 0:  # Cena roste směrem k high
+                        if self.app:
+                            self.app.log(f"[SWING_EXTREME] Blocking: Price rising toward swing high (uptrend)")
+                        return True
+                        
+        elif trend_direction == 'DOWN' and last_low_price:
+            distance_from_low = abs(current_price - last_low_price)
+            if distance_from_low <= tolerance:
+                # Zkontrolujeme momentum: pokud poslední 2 bary klesají → blokovat
+                if len(bars) >= 2:
+                    price_change = bars[-1]['close'] - bars[-2]['close']
+                    if price_change < 0:  # Cena klesá směrem k low
+                        if self.app:
+                            self.app.log(f"[SWING_EXTREME] Blocking: Price falling toward swing low (downtrend)")
+                        return True
+        
+        return False
+    
+    def _is_in_pullback_zone(self, bars: List[Dict], swing_state: Dict, trend_direction: str) -> bool:
+        """
+        Zkontroluje, zda je cena v pullback zóně (ne na vrcholu swingu)
+        
+        Pullback zóna = cena se vzdaluje od swing extrému (klesá z high v uptrendu, roste z low v downtrendu)
+        Kontroluje také EMA(34) trend pro dodatečnou validaci.
+        
+        Args:
+            bars: OHLC data
+            swing_state: Swing state
+            trend_direction: 'UP', 'DOWN', nebo 'SIDEWAYS'
+            
+        Returns:
+            True pokud je cena v pullback zóně
+        """
+        if not trend_direction or trend_direction.upper() in ['SIDEWAYS', 'RANGE']:
+            # V range markets bychom měli použít EMA34 trend pokud je dostupný
+            # Pokud nemáme trend, vrátíme True (ale mělo by se to řešit výše pomocí EMA34)
+            return True  # V range markets bez EMA34 trendu je vše "pullback zone"
+            
+        if len(bars) < 5:
+            return False  # Potřebujeme alespoň 5 barů pro analýzu
+        
+        # DODATEČNÁ KONTROLA: EMA(34) trend
+        ema34_trend = self._get_ema34_trend(bars)
+        if ema34_trend and ema34_trend != trend_direction:
+            # EMA trend se liší od regime trendu - být přísnější
+            if self.app:
+                self.app.log(f"[PULLBACK] EMA34 trend ({ema34_trend}) differs from regime trend ({trend_direction}) - using EMA")
+            trend_direction = ema34_trend  # Použijeme EMA trend
+            
+        current_price = bars[-1]['close']
+        pullback_tolerance = self.current_atr * 0.2  # Přísnější tolerance: 0.2 ATR
+        
+        # DODATEČNÁ KONTROLA: EMA(34) pozice
+        if len(bars) >= 34:
+            ema34 = self._calculate_ema(bars, 34)
+            if ema34 > 0:
+                if trend_direction == 'UP':
+                    # V uptrendu: pullback zóna je když cena je pod nebo blízko EMA(34)
+                    # Pokud je cena výrazně nad EMA(34), není to pullback
+                    if current_price > ema34 * 1.002:  # Více než 0.2% nad EMA
+                        if self.app:
+                            self.app.log(f"[PULLBACK] Rejecting: Price {current_price:.1f} too far above EMA34 {ema34:.1f} (uptrend)")
+                        return False
+                elif trend_direction == 'DOWN':
+                    # V downtrendu: pullback zóna je když cena je nad nebo blízko EMA(34)
+                    # Pokud je cena výrazně pod EMA(34), není to pullback
+                    if current_price < ema34 * 0.998:  # Více než 0.2% pod EMA
+                        if self.app:
+                            self.app.log(f"[PULLBACK] Rejecting: Price {current_price:.1f} too far below EMA34 {ema34:.1f} (downtrend)")
+                        return False
+        
+        # Získáme swing high/low
+        last_high = swing_state.get('last_high')
+        last_low = swing_state.get('last_low')
+        
+        if last_high is None or last_low is None:
+            lookback = min(20, len(bars) - 2)
+            if lookback > 0:
+                recent_bars = bars[-lookback:-1]
+                if not last_high:
+                    last_high = max(b['high'] for b in recent_bars) if recent_bars else None
+                if not last_low:
+                    last_low = min(b['low'] for b in recent_bars) if recent_bars else None
+        
+        # Zpracování swing high/low
+        if isinstance(last_high, dict):
+            last_high_price = last_high.get('price')
+        else:
+            last_high_price = last_high
+            
+        if isinstance(last_low, dict):
+            last_low_price = last_low.get('price')
+        else:
+            last_low_price = last_low
+        
+        if trend_direction == 'UP':
+            # V uptrendu: pullback zóna je když cena klesla pod recent high A pohybuje se dolů
+            if last_high_price:
+                # KONTROLA 1: Cena musí být pod swing high (s tolerancí)
+                if current_price >= (last_high_price - pullback_tolerance):
+                    if self.app:
+                        self.app.log(f"[PULLBACK] Rejecting: Price {current_price:.1f} too close to swing high {last_high_price:.1f} (uptrend)")
+                    return False
+                
+                # KONTROLA 2: Cena se musí vzdalovat od high (pullback pattern)
+                # Zkontrolujeme poslední 3 bary - měly by ukazovat pokles
+                if len(bars) >= 3:
+                    recent_closes = [b['close'] for b in bars[-3:]]
+                    # Pokud poslední 2 bary rostou → není to pullback
+                    if recent_closes[-1] > recent_closes[-2]:
+                        if self.app:
+                            self.app.log(f"[PULLBACK] Rejecting: Price rising (not pulling back) in uptrend")
+                        return False
+                    
+                    # Pokud cena je stále velmi blízko high → není to pullback
+                    max_recent_high = max(b['high'] for b in bars[-3:])
+                    if max_recent_high >= (last_high_price - pullback_tolerance * 2):
+                        if self.app:
+                            self.app.log(f"[PULLBACK] Rejecting: Recent high {max_recent_high:.1f} too close to swing high {last_high_price:.1f}")
+                        return False
+                
+                # KONTROLA 3: RSI Confirmation
+                rsi_confirmed, rsi_reason = self._check_rsi_pullback_confirmation(bars, trend_direction)
+                if not rsi_confirmed:
+                    if self.app:
+                        self.app.log(f"[PULLBACK] Rejecting: {rsi_reason}")
+                    return False
+                
+                # Pokud jsme tady, cena je v pullback zóně
+                if self.app:
+                    self.app.log(f"[PULLBACK] ✅ Price {current_price:.1f} in pullback zone (below swing high {last_high_price:.1f})")
+                    self.app.log(f"[PULLBACK] ✅ RSI confirmation: {rsi_reason}")
+                return True
+                
+            # Pokud nemáme swing high, použijeme recent high z bars
+            if len(bars) >= 5:
+                recent_high = max(b['high'] for b in bars[-5:-1])
+                if current_price < (recent_high - pullback_tolerance):
+                    # Zkontrolujeme momentum
+                    if len(bars) >= 2:
+                        if bars[-1]['close'] <= bars[-2]['close']:  # Cena klesá
+                            return True
+                return False
+                
+        elif trend_direction == 'DOWN':
+            # V downtrendu: pullback zóna je když cena stoupla nad recent low A pohybuje se nahoru
+            if last_low_price:
+                # KONTROLA 1: Cena musí být nad swing low (s tolerancí)
+                if current_price <= (last_low_price + pullback_tolerance):
+                    if self.app:
+                        self.app.log(f"[PULLBACK] Rejecting: Price {current_price:.1f} too close to swing low {last_low_price:.1f} (downtrend)")
+                    return False
+                
+                # KONTROLA 2: Cena se musí vzdalovat od low (pullback pattern)
+                # Zkontrolujeme poslední 3 bary - měly by ukazovat růst
+                if len(bars) >= 3:
+                    recent_closes = [b['close'] for b in bars[-3:]]
+                    # Pokud poslední 2 bary klesají → není to pullback
+                    if recent_closes[-1] < recent_closes[-2]:
+                        if self.app:
+                            self.app.log(f"[PULLBACK] Rejecting: Price falling (not pulling back) in downtrend")
+                        return False
+                    
+                    # Pokud cena je stále velmi blízko low → není to pullback
+                    min_recent_low = min(b['low'] for b in bars[-3:])
+                    if min_recent_low <= (last_low_price + pullback_tolerance * 2):
+                        if self.app:
+                            self.app.log(f"[PULLBACK] Rejecting: Recent low {min_recent_low:.1f} too close to swing low {last_low_price:.1f}")
+                        return False
+                
+                # KONTROLA 3: RSI Confirmation
+                rsi_confirmed, rsi_reason = self._check_rsi_pullback_confirmation(bars, trend_direction)
+                if not rsi_confirmed:
+                    if self.app:
+                        self.app.log(f"[PULLBACK] Rejecting: {rsi_reason}")
+                    return False
+                
+                # Pokud jsme tady, cena je v pullback zóně
+                if self.app:
+                    self.app.log(f"[PULLBACK] ✅ Price {current_price:.1f} in pullback zone (above swing low {last_low_price:.1f})")
+                    self.app.log(f"[PULLBACK] ✅ RSI confirmation: {rsi_reason}")
+                return True
+                
+            # Pokud nemáme swing low, použijeme recent low z bars
+            if len(bars) >= 5:
+                recent_low = min(b['low'] for b in bars[-5:-1])
+                if current_price > (recent_low + pullback_tolerance):
+                    # Zkontrolujeme momentum
+                    if len(bars) >= 2:
+                        if bars[-1]['close'] >= bars[-2]['close']:  # Cena roste
+                            return True
+                return False
+        
+        return False  # Default: nepovolit (přísnější)
+    
     def _check_structure_breaks(self, bars: List[Dict], 
                                 swing_state: Dict, 
                                 pivot_levels: Dict) -> List[Dict]:
-        """Check for structure breaks"""
+        """
+        Check for structure breaks and breakout retests
+        
+        Breakout Retest Strategy:
+        - Po breakoutu čekáme na retest breakout levelu
+        - Retest potvrzuje breakout a poskytuje lepší entry
+        - Méně false breakouts, lepší R:R
+        """
         breaks = []
         current_price = bars[-1]['close']
         
@@ -958,30 +1888,153 @@ class EdgeDetector:
         if last_low is None and len(bars) >= lookback:
             last_low = min(b['low'] for b in bars[-lookback:])
         
-        # Swing breaks
-        if last_high and current_price > last_high:
-            breaks.append({
-                'type': 'SWING_HIGH_BREAK',
-                'level': last_high,
-                'direction': 'bullish'
-            })
-        
-        if last_low and current_price < last_low:
-            breaks.append({
-                'type': 'SWING_LOW_BREAK',
-                'level': last_low,
-                'direction': 'bearish'
-            })
-        
-        # Pivot tests
         tolerance = self.current_atr * 0.3
         
+        # === BREAKOUT RETEST DETECTION ===
+        # Detekce, zda cena testuje nedávný breakout level
+        # To je důležité - retest po breakoutu je silnější signál než samotný breakout
+        
+        # Check for swing high breakout retest
+        if last_high:
+            # Zkontroluj, zda byl nedávný breakout nad last_high
+            recent_breakout = False
+            breakout_bar_idx = None
+            
+            # Hledej breakout v posledních 20 barech
+            for i in range(max(0, len(bars) - 20), len(bars) - 1):
+                if bars[i]['close'] > last_high:
+                    recent_breakout = True
+                    breakout_bar_idx = i
+                    break
+            
+            if recent_breakout and breakout_bar_idx is not None:
+                # Po breakoutu hledej retest - cena se vrátila k levelu
+                # Retest = cena je blízko breakout levelu a začíná se odrážet
+                distance_from_level = abs(current_price - last_high)
+                
+                if distance_from_level <= tolerance:
+                    # Zkontroluj, zda cena se odráží (ne proráží zpět)
+                    # V uptrendu: cena by měla být nad nebo blízko levelu a začínat růst
+                    if current_price >= last_high * 0.999:  # Nad nebo velmi blízko levelu
+                        # Zkontroluj momentum - poslední 2-3 bary by měly být bullish
+                        if len(bars) >= 3:
+                            recent_closes = [b['close'] for b in bars[-3:]]
+                            if recent_closes[-1] >= recent_closes[-2]:  # Roste nebo drží
+                                breaks.append({
+                                    'type': 'SWING_HIGH_BREAK_RETEST',
+                                    'level': last_high,
+                                    'direction': 'bullish',
+                                    'confidence': 85,  # Retest je silnější než samotný breakout
+                                    'breakout_bar': breakout_bar_idx
+                                })
+        
+        # Check for swing low breakout retest
+        if last_low:
+            # Zkontroluj, zda byl nedávný breakout pod last_low
+            recent_breakout = False
+            breakout_bar_idx = None
+            
+            for i in range(max(0, len(bars) - 20), len(bars) - 1):
+                if bars[i]['close'] < last_low:
+                    recent_breakout = True
+                    breakout_bar_idx = i
+                    break
+            
+            if recent_breakout and breakout_bar_idx is not None:
+                distance_from_level = abs(current_price - last_low)
+                
+                if distance_from_level <= tolerance:
+                    # V downtrendu: cena by měla být pod nebo blízko levelu a začínat klesat
+                    if current_price <= last_low * 1.001:  # Pod nebo velmi blízko levelu
+                        if len(bars) >= 3:
+                            recent_closes = [b['close'] for b in bars[-3:]]
+                            if recent_closes[-1] <= recent_closes[-2]:  # Klesá nebo drží
+                                breaks.append({
+                                    'type': 'SWING_LOW_BREAK_RETEST',
+                                    'level': last_low,
+                                    'direction': 'bearish',
+                                    'confidence': 85,
+                                    'breakout_bar': breakout_bar_idx
+                                })
+        
+        # === ORIGINAL BREAKOUT DETECTION (s přísnou validací proti false breakouts) ===
+        # Swing breaks (pouze pokud NENÍ retest)
+        has_retest = any('RETEST' in b.get('type', '') for b in breaks)
+        
+        if not has_retest:
+            # === PŘÍSNÁ VALIDACE BREAKOUTU ===
+            # False breakout = cena prorazí level, ale uzavře zpět nebo se vrátí
+            
+            # Swing high breakout
+            if last_high and current_price > last_high:
+                # VALIDACE 1: Close confirmation - bar musí uzavřít nad levelem
+                if bars[-1]['close'] <= last_high:
+                    # Breakout nepotvrzen close → pravděpodobně false breakout
+                        if self.app and self.logging.should_log('breakout', f"false_breakout_close:{last_high:.1f}"):
+                            self.app.log(f"[FALSE_BREAKOUT] Blocking: Price broke {last_high:.1f} but closed at {bars[-1]['close']:.1f} (below level)")
+                    # NEPŘIDÁVAT - false breakout
+                else:
+                    # VALIDACE 2: Multiple bar confirmation - min 2 bary nad levelem
+                    bars_above = 0
+                    for i in range(-1, -min(3, len(bars)), -1):
+                        if bars[i]['close'] > last_high:
+                            bars_above += 1
+                    
+                    if bars_above >= 2:
+                        # VALIDACE 3: Momentum check - cena by měla růst
+                        if len(bars) >= 2 and bars[-1]['close'] >= bars[-2]['close']:
+                            breaks.append({
+                                'type': 'SWING_HIGH_BREAK',
+                                'level': last_high,
+                                'direction': 'bullish',
+                                'confidence': 70,
+                                'validated': True  # Prošlo validací
+                            })
+                        else:
+                            if self.app and self.logging.should_log('breakout', f"false_breakout_momentum:{last_high:.1f}"):
+                                self.app.log(f"[FALSE_BREAKOUT] Blocking: Breakout above {last_high:.1f} but momentum not confirming")
+                    else:
+                        if self.app and self.logging.should_log('breakout', f"false_breakout_bars:{last_high:.1f}"):
+                            self.app.log(f"[FALSE_BREAKOUT] Blocking: Breakout above {last_high:.1f} but only {bars_above} bars confirmed (need 2+)")
+            
+            # Swing low breakout
+            if last_low and current_price < last_low:
+                # VALIDACE 1: Close confirmation
+                if bars[-1]['close'] >= last_low:
+                    if self.app and self.logging.should_log('breakout', f"false_breakout_close:{last_low:.1f}"):
+                        self.app.log(f"[FALSE_BREAKOUT] Blocking: Price broke {last_low:.1f} but closed at {bars[-1]['close']:.1f} (above level)")
+                else:
+                    # VALIDACE 2: Multiple bar confirmation
+                    bars_below = 0
+                    for i in range(-1, -min(3, len(bars)), -1):
+                        if bars[i]['close'] < last_low:
+                            bars_below += 1
+                    
+                    if bars_below >= 2:
+                        # VALIDACE 3: Momentum check
+                        if len(bars) >= 2 and bars[-1]['close'] <= bars[-2]['close']:
+                            breaks.append({
+                                'type': 'SWING_LOW_BREAK',
+                                'level': last_low,
+                                'direction': 'bearish',
+                                'confidence': 70,
+                                'validated': True
+                            })
+                        else:
+                            if self.app and self.logging.should_log('breakout', f"false_breakout_momentum:{last_low:.1f}"):
+                                self.app.log(f"[FALSE_BREAKOUT] Blocking: Breakout below {last_low:.1f} but momentum not confirming")
+                    else:
+                        if self.app and self.logging.should_log('breakout', f"false_breakout_bars:{last_low:.1f}"):
+                            self.app.log(f"[FALSE_BREAKOUT] Blocking: Breakout below {last_low:.1f} but only {bars_below} bars confirmed (need 2+)")
+        
+        # Pivot tests
         for level_name, level_value in (pivot_levels or {}).items():
             if isinstance(level_value, (int, float)) and abs(current_price - level_value) <= tolerance:
                 breaks.append({
                     'type': f'PIVOT_{level_name}_TEST',
                     'level': level_value,
-                    'direction': 'neutral'
+                    'direction': 'neutral',
+                    'confidence': 60
                 })
         
         return breaks
@@ -1063,11 +2116,11 @@ class EdgeDetector:
         hour = now.hour
         
         if 'DAX' in symbol.upper() or 'DE40' in symbol.upper():
-            # DAX quality hours: 9:00-14:30 CET
-            return (9 <= hour < 14) or (hour == 14 and now.minute <= 30)
+            # DAX quality hours: 9:00-15:30 CET
+            return (9 <= hour < 15) or (hour == 15 and now.minute <= 30)
         elif 'NASDAQ' in symbol.upper() or 'US100' in symbol.upper():
-            # NASDAQ quality hours: 14:30-22:00 CET
-            return (hour == 14 and now.minute >= 30) or (15 <= hour <= 22)
+            # NASDAQ quality hours: 15:30-22:00 CET
+            return (hour == 15 and now.minute >= 30) or (16 <= hour < 22)
         
         return True
     

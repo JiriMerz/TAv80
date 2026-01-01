@@ -1,0 +1,6 @@
+# Závislosti pro backtesting
+# Nainstaluj pomocí: pip install -r backtesting/requirements.txt
+
+certifi>=2023.7.22  # Pro SSL certifikáty
+websockets>=12.0  # Pro WebSocket připojení (měl by být už nainstalován)
+

@@ -1,0 +1,1900 @@
+# Kompletní configuration.yaml s integrovaným Trading systémem
+
+# ========================================
+# Home Assistant – Energetický monitoring + Trading System
+# Refaktoring: 2025-08-28 19:44
+# Autor: Jiri Merz
+# Verze: 1.0
+# ========================================
+
+# ========================================
+# POMOCNÉ VSTUPY (Helpers) – KONSTANTY A PARAMETRY
+# ========================================
+input_text:
+  distribution_high_hours:
+    name: "VT hodiny"
+    initial: "9:00 - 10:00, 12:00 - 13:00"
+
+input_number:
+  # === ENERGY MONITORING ===
+  daily_fixed_fee:
+    name: "Denní fixní poplatek"
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 24.26
+    unit_of_measurement: "CZK"
+    icon: mdi:cash
+    mode: box
+
+  fee_ote_kwh:
+    name: "OTE poplatek (CZK/kWh)"
+    min: 0
+    max: 5
+    step: 0.01
+    initial: 0.50
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:cash
+
+  fee_tax_kwh:
+    name: "Daň (CZK/kWh)"
+    min: 0
+    max: 5
+    step: 0.01
+    initial: 0.03
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:cash
+
+  fee_system_services_kwh:
+    name: "Systémové služby (CZK/kWh)"
+    min: 0
+    max: 5
+    step: 0.01
+    initial: 0.17
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:cash
+
+  fee_supplier_spread_kwh:
+    name: "Obchodník – přirážka (CZK/kWh)"
+    min: 0
+    max: 5
+    step: 0.01
+    initial: 0.35
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:cash
+
+  distribution_low_kwh:
+    name: "Distribuce – nízká (CZK/kWh)"
+    min: 0
+    max: 5
+    step: 0.01
+    initial: 0.21
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:transmission-tower
+
+  distribution_high_kwh:
+    name: "Distribuce – vysoká (CZK/kWh)"
+    min: 0
+    max: 5
+    step: 0.01
+    initial: 0.72
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:transmission-tower
+
+  vat_percent:
+    name: "DPH (%)"
+    min: 0
+    max: 30
+    step: 0.5
+    initial: 21
+    unit_of_measurement: "%"
+    icon: mdi:percent
+
+  export_offset_kwh:
+    name: "Export – odpočet od spotu (CZK/kWh)"
+    min: -5
+    max: 5
+    step: 0.01
+    initial: 0.45
+    unit_of_measurement: "CZK/kWh"
+    icon: mdi:cash-minus
+
+  hours_per_day:
+    name: "Hodin za den (pro dělení fixu)"
+    min: 1
+    max: 48
+    step: 1
+    initial: 24
+    unit_of_measurement: "h"
+    icon: mdi:clock-outline
+
+  mtd_import_cost_offset:
+    name: MTD Import cost offset
+    min: -100000
+    max: 100000
+    step: 0.01
+    unit_of_measurement: "CZK"
+
+  mtd_export_revenue_offset:
+    name: MTD Export revenue offset
+    min: -100000
+    max: 100000
+    step: 0.01
+    unit_of_measurement: "CZK"
+
+  mtd_import_energy_offset_kwh:
+    name: MTD Import energy offset
+    min: -100000
+    max: 100000
+    step: 0.001
+    unit_of_measurement: "kWh"
+
+  mtd_export_energy_offset_kwh:
+    name: MTD Export energy offset
+    min: -100000
+    max: 100000
+    step: 0.001
+    unit_of_measurement: "kWh"
+
+  # === TRADING SYSTEM ===
+  equity_czk:
+    name: "Trading Equity (CZK)"
+    min: 1000
+    max: 30000000
+    step: 1000
+    initial: 2000000 # Váš kapitál v CZK
+    unit_of_measurement: "CZK"
+    icon: mdi:cash
+    mode: box
+
+  trading_account_balance:
+    name: "Trading - Account Balance"
+    min: 1000
+    max: 100000
+    step: 1000
+    initial: 50000
+    unit_of_measurement: "USD"
+    icon: mdi:bank
+    mode: box
+   
+  account_balance:
+    name: "Trading Account Balance"
+    min: 10000
+    max: 100000000
+    step: 10000
+    initial: 20000000  # Stejné jako v apps.yaml
+    unit_of_measurement: "CZK"
+    icon: mdi:bank
+    mode: box
+
+  trading_risk_percent:
+    name: "Trading - Risk per Trade"
+    min: 0.5
+    max: 5
+    step: 0.5
+    initial: 1
+    unit_of_measurement: "%"
+    icon: mdi:percent
+    mode: slider
+
+  trade_entry_price:
+    name: "Trade Entry Price"
+    min: 0
+    max: 99999
+    step: 0.00001
+    mode: box
+    icon: mdi:target
+
+  trade_stop_loss:
+    name: "Trade Stop Loss"
+    min: 0
+    max: 99999
+    step: 0.00001
+    mode: box
+    icon: mdi:shield-alert
+
+  trade_take_profit_1:
+    name: "Trade Take Profit 1"
+    min: 0
+    max: 99999
+    step: 0.00001
+    mode: box
+    icon: mdi:cash
+
+  trade_take_profit_2:
+    name: "Trade Take Profit 2"
+    min: 0
+    max: 99999
+    step: 0.00001
+    mode: box
+    icon: mdi:cash-multiple
+
+  trade_take_profit_3:
+    name: "Trade Take Profit 3"
+    min: 0
+    max: 99999
+    step: 0.00001
+    mode: box
+    icon: mdi:cash-100
+
+  trade_lot_size:
+    name: "Trade Position Size"
+    min: 0.01
+    max: 10
+    step: 0.01
+    initial: 0.1
+    mode: box
+    icon: mdi:scale-balance
+
+  trading_min_confidence:
+    name: "Trading - Min Signal Confidence"
+    min: 50
+    max: 100
+    step: 5
+    initial: 70
+    unit_of_measurement: "%"
+    icon: mdi:percent
+    mode: slider
+
+  ctrader_lots:
+    name: cTrader lots
+    min: 0.01
+    max: 50
+    step: 0.01
+    mode: box
+    unit_of_measurement: "lots"
+
+# ========================================
+# INPUT SELECT
+# ========================================
+input_select:
+  trade_symbol:
+    name: "Trading Symbol"
+    options:
+      - EURUSD
+      - GBPUSD
+      - USDJPY
+      - AUDUSD
+      - USDCHF
+      - USDCAD
+      - NZDUSD
+      - EURJPY
+      - NASDAQ
+      - DAX
+    initial: EURUSD
+    icon: mdi:currency-usd
+
+  trade_direction:
+    name: "Trade Direction"
+    options:
+      - BUY
+      - SELL
+    initial: BUY
+    icon: mdi:arrow-up-down
+
+  trade_timeframe:
+    name: "Analysis Timeframe"
+    options:
+      - M1
+      - M5
+      - M15
+      - H1
+    initial: M15
+    icon: mdi:clock-outline
+
+# ========================================
+# INPUT BOOLEAN
+# ========================================
+input_boolean:
+  clear_signals:
+    name: Clear All Signals
+    icon: mdi:delete-sweep
+    
+  trading_signals_enabled:
+    name: "Trading Signals Active"
+    initial: true
+    icon: mdi:chart-line
+
+  trading_notifications_enabled:
+    name: "Trading Notifications"
+    initial: true
+    icon: mdi:bell
+
+  trading_london_session_only:
+    name: "London Session Only"
+    initial: false
+    icon: mdi:clock-time-eight
+
+  trading_news_filter:
+    name: "News Filter Active"
+    initial: false
+    icon: mdi:newspaper-variant
+
+  force_signal_dax:
+    name: Force DAX Test Signal
+    initial: false
+    icon: mdi:test-tube
+    
+  force_signal_nasdaq:
+    name: Force NASDAQ Test Signal
+    initial: false
+    icon: mdi:test-tube
+    
+  dax_signal_executed:
+    name: DAX Signal Executed
+    initial: false
+    
+  nasdaq_signal_executed:
+    name: NASDAQ Signal Executed
+    initial: false
+    
+  dax_signal_cancelled:
+    name: DAX Signal Cancelled
+    initial: false
+    
+  nasdaq_signal_cancelled:
+    name: NASDAQ Signal Cancelled
+    initial: false
+    
+  # === WATCHDOG & KILL SWITCH (Dead Man's Switch) ===
+  trading_watchdog:
+    name: "Trading Bot Watchdog"
+    initial: false
+    icon: mdi:heart-pulse
+    
+  trading_kill_switch:
+    name: "Trading Kill Switch"
+    initial: false
+    icon: mdi:alert-octagon
+    
+  trading_kill_switch_enabled:
+    name: "Kill Switch Enabled"
+    initial: false
+    icon: mdi:shield-alert
+    
+  auto_trading_enabled:
+    name: "Auto Trading Enabled"
+    initial: false
+    icon: mdi:robot
+    
+#
+# MQTT senzory pro Trading System
+#
+mqtt:
+  sensor:
+    - name: "Trading Assistant Status"
+      state_topic: "trader/health"
+      value_template: "{{ value_json.status }}"
+      icon: mdi:robot
+      
+    - name: "Trading Assistant Uptime"
+      state_topic: "trader/health"
+      value_template: "{{ value_json.uptime_minutes | default(0) | int }}"
+      unit_of_measurement: "min"
+      icon: mdi:timer
+      
+    - name: "Trading Assistant Errors"
+      state_topic: "trader/health"
+      value_template: "{{ value_json.errors | length if value_json.errors else 0 }}"
+      icon: mdi:alert-circle
+      
+    - name: "Trading Assistant Bars Processed"
+      state_topic: "trader/health"
+      value_template: "{{ value_json.metrics.bars_processed if value_json.metrics else 0 }}"
+      icon: mdi:chart-bar
+      
+    - name: "Trading Assistant Signals Generated"
+      state_topic: "trader/health"
+      value_template: "{{ value_json.metrics.signals_generated if value_json.metrics else 0 }}"
+      icon: mdi:bell-ring
+
+  binary_sensor:
+    - name: "Trading MQTT Connected"
+      state_topic: "trader/health"
+      value_template: "{{ value_json.mqtt }}"
+      device_class: connectivity
+      icon: mdi:message-badge
+
+# ========================================
+# TEMPLATE – JEDEN BLOK (základ + výpočty + snapshoty)
+# ========================================
+template:
+  - sensor:
+      # ------- DAX M1 -------
+      - name: "DAX M1 Regime State"
+        unique_id: dax_m1_regime_state
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 'unknown' }}
+          {% else %}
+            {% set m = s | regex_findall('state=([A-Z_]+)') %}
+            {{ m[0] if m|length else 'unknown' }}
+          {% endif %}
+      - name: "DAX M1 ADX"
+        unique_id: dax_m1_adx
+        state_class: measurement
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('adx=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+      - name: "DAX M1 R2"
+        unique_id: dax_m1_r2
+        state_class: measurement
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('r2=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+      - name: "DAX M1 Beta ATR"
+        unique_id: dax_m1_beta_atr
+        state_class: measurement
+        unit_of_measurement: "ATR"
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('beta_atr=([+\\-]?[0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+      - name: "DAX M1 Pivot Nearest"
+        unique_id: dax_m1_pivot_nearest
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 'NA' }}
+          {% else %}
+            {% set m = s | regex_findall('pivot=([A-Z0-9]+|NA)') %}
+            {{ m[0] if m|length else 'NA' }}
+          {% endif %}
+      - name: "DAX M1 Pivot Dist ATR"
+        unique_id: dax_m1_pivot_dist_atr
+        state_class: measurement
+        unit_of_measurement: "ATR"
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ none }}
+          {% else %}
+            {% set m = s | regex_findall('d=([0-9.]+|nan)ATR') %}
+            {% if m|length %}
+              {% set val = m[0] %}
+              {{ (none if val == 'nan' else val | float) }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% endif %}
+      - name: "DAX M1 Swing Quality"
+        unique_id: dax_m1_swing_quality
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('swq=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float | round(0) }}
+          {% endif %}
+      - name: "DAX M1 Last Impulse ATR"
+        unique_id: dax_m1_last_impulse_atr
+        state_class: measurement
+        unit_of_measurement: "ATR"
+        state: >
+          {% set s = states('sensor.dax_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('last_imp=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+
+      # ------- NASDAQ M1 -------
+      - name: "NASDAQ M1 Regime State"
+        unique_id: nasdaq_m1_regime_state
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 'unknown' }}
+          {% else %}
+            {% set m = s | regex_findall('state=([A-Z_]+)') %}
+            {{ m[0] if m|length else 'unknown' }}
+          {% endif %}
+      - name: "NASDAQ M1 ADX"
+        unique_id: nasdaq_m1_adx
+        state_class: measurement
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('adx=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+      - name: "NASDAQ M1 R2"
+        unique_id: nasdaq_m1_r2
+        state_class: measurement
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('r2=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+      - name: "NASDAQ M1 Beta ATR"
+        unique_id: nasdaq_m1_beta_atr
+        state_class: measurement
+        unit_of_measurement: "ATR"
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('beta_atr=([+\\-]?[0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+      - name: "NASDAQ M1 Pivot Nearest"
+        unique_id: nasdaq_m1_pivot_nearest
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 'NA' }}
+          {% else %}
+            {% set m = s | regex_findall('pivot=([A-Z0-9]+|NA)') %}
+            {{ m[0] if m|length else 'NA' }}
+          {% endif %}
+      - name: "NASDAQ M1 Pivot Dist ATR"
+        unique_id: nasdaq_m1_pivot_dist_atr
+        state_class: measurement
+        unit_of_measurement: "ATR"
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ none }}
+          {% else %}
+            {% set m = s | regex_findall('d=([0-9.]+|nan)ATR') %}
+            {% if m|length %}
+              {% set val = m[0] %}
+              {{ (none if val == 'nan' else val | float) }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% endif %}
+      - name: "NASDAQ M1 Swing Quality"
+        unique_id: nasdaq_m1_swing_quality
+        state_class: measurement
+        unit_of_measurement: "%"
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('swq=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float | round(0) }}
+          {% endif %}
+      - name: "NASDAQ M1 Last Impulse ATR"
+        unique_id: nasdaq_m1_last_impulse_atr
+        state_class: measurement
+        unit_of_measurement: "ATR"
+        state: >
+          {% set s = states('sensor.nasdaq_m1_regime_raw') %}
+          {% if s in ['unknown','unavailable','none','None',''] %}
+            {{ 0 }}
+          {% else %}
+            {% set m = s | regex_findall('last_imp=([0-9.]+)') %}
+            {{ (m[0] if m|length else 0) | float }}
+          {% endif %}
+
+  # --- ZÁKLADNÍ SENSORY A CENY ---
+  - sensor:
+      - name: "Current Time Full"
+        state: "{{ now().strftime('%H:%M:%S') }}"
+        icon: mdi:clock-digital
+        attributes:
+          date: "{{ now().strftime('%d.%m.%Y') }}"
+          day: "{{ now().strftime('%A') }}"
+          timestamp: "{{ now().timestamp() }}"
+
+      - name: "Energy Buy"
+        unique_id: energy_buy
+        state: >
+          {% set l1 = states('sensor.active_power_l1')|float(0) %}
+          {% set l2 = states('sensor.active_power_l2')|float(0) %}
+          {% set l3 = states('sensor.active_power_l3')|float(0) %}
+          {% set imp = (0
+            + (l1 < 0) * (l1 * -1)
+            + (l2 < 0) * (l2 * -1)
+            + (l3 < 0) * (l3 * -1)) %}
+          {{ imp|round(2) }}
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower-import
+
+      - name: "Energy Sell"
+        unique_id: energy_sell
+        state: >
+          {% set l1 = states('sensor.active_power_l1')|float(0) %}
+          {% set l2 = states('sensor.active_power_l2')|float(0) %}
+          {% set l3 = states('sensor.active_power_l3')|float(0) %}
+          {% set exp = (0
+            + (l1 > 0) * l1
+            + (l2 > 0) * l2
+            + (l3 > 0) * l3) %}
+          {{ exp|round(2) }}
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower-export
+
+      - name: "Current Distribution Rate"
+        unique_id: current_distribution_rate
+        state: >
+          {% set h = now().hour %}
+          {% if (h >= 9 and h < 10) or (h >= 12 and h < 13) %}
+            {{ states('input_number.distribution_high_kwh') }}
+          {% else %}
+            {{ states('input_number.distribution_low_kwh') }}
+          {% endif %}
+        unit_of_measurement: "CZK/kWh"
+
+      - name: "Current Tariff Zone"
+        unique_id: current_tariff_zone
+        state: >
+          {% set h = now().hour %}
+          {% if (h >= 9 and h < 10) or (h >= 12 and h < 13) %}
+            VT (Vysoký tarif)
+          {% else %}
+            NT (Nízký tarif)
+          {% endif %}
+        icon: >
+          {% set h = now().hour %}
+          {% if (h >= 9 and h < 10) or (h >= 12 and h < 13) %}mdi:clock-alert{% else %}mdi:clock{% endif %}
+
+      - name: "Real Import Price"
+        unique_id: real_import_price
+        state: >
+          {% set spot = states('sensor.current_spot_electricity_price')|float(0) %}
+          {% set distribution = states('sensor.current_distribution_rate')|float(0) %}
+          {% set fee_ote = states('input_number.fee_ote_kwh')|float(0) %}
+          {% set fee_tax = states('input_number.fee_tax_kwh')|float(0) %}
+          {% set fee_sys = states('input_number.fee_system_services_kwh')|float(0) %}
+          {% set fee_spread = states('input_number.fee_supplier_spread_kwh')|float(0) %}
+          {% set vat = states('input_number.vat_percent')|float(21) / 100 %}
+          {% set base = spot + distribution + fee_ote + fee_tax + fee_sys + fee_spread %}
+          {{ (base * (1 + vat))|round(4) }}
+        unit_of_measurement: "CZK/kWh"
+        icon: mdi:cash-minus
+
+      - name: "Real Export Price"
+        unique_id: real_export_price
+        state: >
+          {% set spot = states('sensor.current_spot_electricity_price')|float(0) %}
+          {% set off = states('input_number.export_offset_kwh')|float(0) %}
+          {{ (spot - off)|round(4) }}
+        unit_of_measurement: "CZK/kWh"
+        icon: >
+          {% if (states('sensor.current_spot_electricity_price')|float(0) - states('input_number.export_offset_kwh')|float(0)) > 0 %}mdi:cash-plus{% else %}mdi:cash-minus{% endif %}
+
+      - name: "Price Status Info"
+        unique_id: price_status_info
+        state: >
+          {% set spot = states('sensor.current_spot_electricity_price')|float(0) %}
+          {% set export_price = states('sensor.real_export_price')|float(0) %}
+          {% set off = states('input_number.export_offset_kwh')|float(0) %}
+          {% if spot >= 0 %}
+            {% if export_price > 0 %}
+              Normální: Export=zisk, Import=náklad
+            {% else %}
+              Export ztrátový (cena < offset {{ off }} CZK/kWh)
+            {% endif %}
+          {% else %}
+            ZÁPORNÉ CENY: Export=náklad, Import=zisk!
+          {% endif %}
+        icon: >
+          {% if states('sensor.current_spot_electricity_price')|float(0) >= 0 %}mdi:information{% else %}mdi:alert-circle{% endif %}
+
+  # --- HLAVNÍ VÝPOČTY (GoodWe / SmartMeter / porovnání) ---
+  - sensor:
+      - name: "GoodWe Import Cost Rate"
+        unique_id: goodwe_import_cost_rate
+        state: >
+          {% set p_w = states('sensor.energy_buy')|float(0) %}
+          {% set price = states('sensor.real_import_price')|float(0) %}
+          {{ (p_w / 1000) * price }}
+        unit_of_measurement: "CZK/h"
+        state_class: measurement
+        icon: mdi:cash-clock
+
+      - name: "GoodWe Export Revenue Rate"
+        unique_id: goodwe_export_revenue_rate
+        state: >
+          {% set p_w = states('sensor.energy_sell')|float(0) %}
+          {% set price = states('sensor.real_export_price')|float(0) %}
+          {{ (p_w / 1000) * price }}
+        unit_of_measurement: "CZK/h"
+        state_class: measurement
+        icon: mdi:cash-clock
+
+      - name: "GoodWe Balance Daily (CZK)"
+        unique_id: goodwe_balance_daily_czk
+        state: >
+          {% set cost = states('sensor.goodwe_import_cost_daily_czk')|float(0) %}
+          {% set revenue = states('sensor.goodwe_export_revenue_daily_czk')|float(0) %}
+          {% set fixed = states('input_number.daily_fixed_fee')|float(0) %}
+          {{ (revenue - cost - fixed)|round(2) }}
+        unit_of_measurement: "CZK"
+        icon: mdi:scale-balance
+
+      - name: "SmartMeter Import Energy Hourly"
+        unique_id: smartmeter_import_energy_hourly
+        state: >
+          {% set vt = states('sensor.vt_hodinova')|float(0) %}
+          {% set nt = states('sensor.nt_hodinova')|float(0) %}
+          {{ (vt + nt)|round(3) }}
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: measurement
+
+      - name: "SmartMeter Import Cost Hourly"
+        unique_id: smartmeter_import_cost_hourly
+        state: >
+          {% set vt = states('sensor.vt_hodinova')|float(0) %}
+          {% set nt = states('sensor.nt_hodinova')|float(0) %}
+          {% set kwh = vt + nt %}
+          {% set price = states('sensor.real_import_price')|float(0) %}
+          {% set fixed_share = (states('input_number.daily_fixed_fee')|float(0) / max(states('input_number.hours_per_day')|float(24), 1)) %}
+          {{ (kwh * price + fixed_share)|round(2) }}
+        unit_of_measurement: "CZK"
+
+      - name: "SmartMeter Import Energy Daily"
+        unique_id: smartmeter_import_energy_daily
+        state: >
+          {% set vt = states('sensor.vt_denni')|float(0) %}
+          {% set nt = states('sensor.nt_denni')|float(0) %}
+          {{ (vt + nt)|round(3) }}
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: measurement
+
+      - name: "SmartMeter Import Energy Monthly"
+        unique_id: smartmeter_import_energy_monthly
+        state: >
+          {% set vt = states('sensor.vt_mesicni')|float(0) %}
+          {% set nt = states('sensor.nt_mesicni')|float(0) %}
+          {{ (vt + nt) | round(3) }}
+        unit_of_measurement: "kWh"
+        device_class: energy
+
+      - name: "SmartMeter Export Energy Hourly"
+        unique_id: smartmeter_export_energy_hourly
+        state: "{{ states('sensor.export_hodinovy')|float(0)|round(3) }}"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: measurement
+
+      - name: "SmartMeter Export Revenue Hourly"
+        unique_id: smartmeter_export_revenue_hourly
+        state: >
+          {% set kwh = states('sensor.export_hodinovy')|float(0) %}
+          {% set price = states('sensor.real_export_price')|float(0) %}
+          {{ (kwh * price)|round(2) }}
+        unit_of_measurement: "CZK"
+
+      - name: "SmartMeter Export Energy Daily"
+        unique_id: smartmeter_export_energy_daily
+        state: "{{ states('sensor.export_denni')|float(0)|round(3) }}"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: measurement
+
+      - name: "SmartMeter Balance Daily (CZK)"
+        unique_id: smartmeter_balance_daily_czk
+        state: >
+          {% set cost = states('sensor.smartmeter_import_cost_daily_czk')|float(0) %}
+          {% set revenue = states('sensor.smartmeter_export_revenue_daily_czk')|float(0) %}
+          {% set fixed = states('input_number.daily_fixed_fee')|float(0) %}
+          {{ (revenue - cost - fixed)|round(2) }}
+        unit_of_measurement: "CZK"
+        icon: mdi:scale-balance
+
+      - name: "SmartMeter Import Cost Monthly (display)"
+        unique_id: sm_import_cost_monthly_display
+        state: >
+          {{ (states('sensor.smartmeter_import_cost_monthly_czk')|float(0)
+             + states('input_number.mtd_import_cost_offset')|float(0)) | round(2) }}
+        unit_of_measurement: "CZK"
+
+      - name: "SmartMeter Export Revenue Monthly (display)"
+        unique_id: sm_export_revenue_monthly_display
+        state: >
+          {{ (states('sensor.smartmeter_export_revenue_monthly_czk')|float(0)
+             + states('input_number.mtd_export_revenue_offset')|float(0)) | round(2) }}
+        unit_of_measurement: "CZK"
+
+      - name: "SmartMeter Import Energy Monthly (display)"
+        unique_id: sm_import_energy_monthly_display
+        state: >
+          {{ (states('sensor.smartmeter_import_energy_monthly')|float(0)
+             + states('input_number.mtd_import_energy_offset_kwh')|float(0)) | round(3) }}
+        unit_of_measurement: "kWh"
+        device_class: energy
+
+      - name: "SmartMeter Export Energy Monthly (display)"
+        unique_id: sm_export_energy_monthly_display
+        state: >
+          {{ (states('sensor.export_mesicni')|float(0)
+             + states('input_number.mtd_export_energy_offset_kwh')|float(0)) | round(3) }}
+        unit_of_measurement: "kWh"
+        device_class: energy
+
+      - name: "SmartMeter Import Cost Daily incl. Fix (CZK)"
+        unique_id: sm_import_cost_daily_incl_fix_czk
+        state: >
+          {% set var = states('sensor.smartmeter_import_cost_daily_czk')|float(0) %}
+          {% set fix = states('input_number.daily_fixed_fee')|float(0) %}
+          {{ (var + fix) | round(2) }}
+        unit_of_measurement: "CZK"
+        icon: mdi:cash-plus
+
+      - name: "Data Source Comparison (CZK)"
+        unique_id: data_source_comparison_czk
+        state: >
+          {% set gw = states('sensor.goodwe_balance_daily_czk')|float(0) %}
+          {% set sm = states('sensor.smartmeter_balance_daily_czk')|float(0) %}
+          {% set diff = (gw - sm)|abs %}
+          {% if diff < 1 %}✅ Shoda
+          {% elif diff < 10 %}⚠️ Rozdíl {{ diff|round(2) }} CZK
+          {% else %}❌ Velký rozdíl {{ diff|round(2) }} CZK!{% endif %}
+
+      - name: "Power Flow Per Phase"
+        unique_id: power_flow_per_phase
+        state: >
+          {% set l1 = states('sensor.active_power_l1')|float(0) %}
+          {% set l2 = states('sensor.active_power_l2')|float(0) %}
+          {% set l3 = states('sensor.active_power_l3')|float(0) %}
+          L1: {{ l1|round(0) }}W, L2: {{ l2|round(0) }}W, L3: {{ l3|round(0) }}W
+        icon: mdi:sine-wave
+
+  # --- GOODWE LOGIKA STAVŮ ---
+  - sensor:
+      - name: "GW Net Grid Power"
+        unique_id: gw_net_grid_power
+        state: >
+          {% set net = states('sensor.meter_active_power_total') %}
+          {% if net not in ['unknown','unavailable',''] %}
+            {{ net|float(0) }}
+          {% else %}
+            {{ (states('sensor.energy_sell')|float(0) - states('sensor.energy_buy')|float(0)) }}
+          {% endif %}
+        unit_of_measurement: "W"
+        icon: mdi:transmission-tower-export
+
+      - name: "GW PV Power (total)"
+        unique_id: gw_pv_power_total
+        state: >
+          {% set pv = states('sensor.pv_power') %}
+          {% if pv not in ['unknown','unavailable',''] %}
+            {{ pv|float(0) }}
+          {% else %}
+            {{ (states('sensor.pv1_power')|float(0) + states('sensor.pv2_power')|float(0)) }}
+          {% endif %}
+        unit_of_measurement: "W"
+        icon: mdi:solar-power
+
+      - name: "GW Battery Flow"
+        unique_id: gw_battery_flow
+        state: "{{ states('sensor.battery_power')|float(0) }}"
+        unit_of_measurement: "W"
+        icon: mdi:battery-sync
+
+      - name: "GW Grid Import (abs)"
+        unique_id: gw_grid_import_abs
+        state: >
+          {% set net = states('sensor.gw_net_grid_power')|float(0) %}
+          {{ (-net) if net < 0 else 0 }}
+        unit_of_measurement: "W"
+        icon: mdi:import
+
+      - name: "GW House Deficit"
+        unique_id: gw_house_deficit
+        state: >
+          {% set load = states('sensor.house_consumption')|float(0) %}
+          {% set pv   = states('sensor.gw_pv_power_total')|float(0) %}
+          {{ (load - pv) if load > pv else 0 }}
+        unit_of_measurement: "W"
+        icon: mdi:home-lightning-bolt
+
+      - name: "GW Grid→Battery (est.)"
+        unique_id: gw_grid_to_battery_est
+        state: >
+          {% set imp_abs = states('sensor.gw_grid_import_abs')|float(0) %}
+          {% set deficit = states('sensor.gw_house_deficit')|float(0) %}
+          {% set to_batt = imp_abs - deficit %}
+          {{ to_batt if to_batt > 0 else 0 }}
+        unit_of_measurement: "W"
+        icon: mdi:battery-arrow-down
+
+      - name: "GW Primary Mode"
+        unique_id: gw_primary_mode
+        state: >
+          {% set eps  = 80 %}
+          {% set eps2 = 200 %}
+          {% set frac = 0.40 %}
+          {% set net     = states('sensor.gw_net_grid_power')|float(0) %}
+          {% set batt    = states('sensor.gw_battery_flow')|float(0) %}
+          {% set exp_w   = states('sensor.energy_sell')|float(0) %}
+          {% set grid2b  = states('sensor.gw_grid_to_battery_est')|float(0) %}
+          {% set batt_chg = (-batt) if batt < 0 else 0 %}
+          {% set batt_dis = ( batt) if batt > 0 else 0 %}
+          {% if batt_chg > eps and grid2b > [eps2, (frac * batt_chg)] | max %}
+            charge_from_grid
+          {% elif net > eps and batt_dis > eps %}
+            batt_to_grid
+          {% elif exp_w > eps and batt > -eps %}
+            feed_in_instead_charge
+          {% elif (batt | abs) < eps and (net > eps or net < -eps) %}
+            batt_saving
+          {% else %}
+            normal
+          {% endif %}
+
+  # --- BINARY SENSORS ---
+  - binary_sensor:
+      - name: "GW – Přetoky zakázány"
+        unique_id: gw_state_no_feed_in
+        state: >
+          {% set eps_net    = 80  %}
+          {% set eps_export = 100 %}
+          {% set margin     = 200 %}
+          {% set pv      = states('sensor.gw_pv_power_total')|float(0) %}
+          {% set load    = states('sensor.house_consumption')|float(0) %}
+          {% set net     = states('sensor.gw_net_grid_power')|float(0) %}
+          {% set export  = states('sensor.energy_sell')|float(0) %}
+          {% set batt_w  = states('sensor.gw_battery_flow')|float(0) %}
+          {% set pv_surplus  = (pv - load) if pv > load else 0 %}
+          {% set batt_charge = (-batt_w) if batt_w < 0 else 0 %}
+          {{ (pv_surplus - batt_charge) > margin
+            and export < eps_export
+            and (net | abs) < eps_net }}
+        device_class: power
+        delay_on: "00:02:00"
+
+      - name: "GW – Prodej z baterie do sítě"
+        unique_id: gw_state_batt_to_grid
+        state: "{{ is_state('sensor.gw_primary_mode', 'batt_to_grid') }}"
+        device_class: power
+
+      - name: "GW – Prodej do sítě místo nabíjení"
+        unique_id: gw_state_feed_in_instead_charge
+        state: "{{ is_state('sensor.gw_primary_mode', 'feed_in_instead_charge') }}"
+        device_class: power
+
+      - name: "GW – Šetření energie v baterii"
+        unique_id: gw_state_batt_saving
+        state: "{{ is_state('sensor.gw_primary_mode', 'batt_saving') }}"
+        device_class: power
+
+      - name: "GW – Nabíjení baterie ze sítě"
+        unique_id: gw_state_charge_from_grid
+        state: "{{ is_state('sensor.gw_primary_mode', 'charge_from_grid') }}"
+        device_class: power
+
+  - sensor:
+      - name: "gw_current_mode_text"
+        unique_id: gw_current_mode_text
+        state: >
+          {% set overlay = ' • Přetoky zakázány' if is_state('binary_sensor.gw_pretoky_zakazany','on') else '' %}
+          {% set mode = states('sensor.gw_primary_mode') %}
+          {% if mode == 'charge_from_grid' %}
+            5) Nabíjení baterie ze sítě{{ overlay }}
+          {% elif mode == 'batt_to_grid' %}
+            2) Prodej z baterie do sítě{{ overlay }}
+          {% elif mode == 'feed_in_instead_charge' %}
+            3) Prodej místo nabíjení baterie{{ overlay }}
+          {% elif mode == 'batt_saving' %}
+            4) Šetření energie v baterii{{ overlay }}
+          {% else %}
+            0) Běžný provoz{{ overlay }}
+          {% endif %}
+        icon: >
+          {% if is_state('binary_sensor.gw_nabijeni_baterie_ze_site', 'on') %}mdi:battery-charging
+          {% elif is_state('binary_sensor.gw_prodej_z_baterie_do_site', 'on') %}mdi:battery-arrow-up
+          {% elif is_state('binary_sensor.gw_prodej_do_site_misto_nabijeni', 'on') %}mdi:transmission-tower-export
+          {% elif is_state('binary_sensor.gw_pretoky_zakazany', 'on') %}mdi:cancel
+          {% elif is_state('binary_sensor.gw_setreni_energie_v_baterii', 'on') %}mdi:battery-heart
+          {% else %}mdi:home-lightning-bolt{% endif %}
+
+      - name: "SmartMeter Balance Monthly (display)"
+        unique_id: sm_balance_monthly_display
+        state: >
+          {{ (
+            states('sensor.smartmeter_export_revenue_monthly_display')|float(0)
+            - states('sensor.smartmeter_import_cost_monthly_incl_fix_display')|float(0)
+          ) | round(2) }}
+        unit_of_measurement: "CZK"
+        icon: mdi:scale-balance
+
+      # === TRADING SENSORS ===
+      
+      - name: "Account Balance Formatted"
+        unique_id: account_balance_formatted
+        state: >
+          {% set balance = states('input_number.account_balance')|float(0) %}
+          {{ "{:,.0f}".format(balance) | replace(",", " ") }} CZK
+        icon: mdi:cash
+      
+      - name: "Trading Position Size Calculator"
+        unique_id: trading_position_size_calc
+        state: >
+          {% set balance = states('input_number.trading_account_balance')|float(10000) %}
+          {% set risk_pct = states('input_number.trading_risk_percent')|float(1) %}
+          {% set entry = states('input_number.trade_entry_price')|float(0) %}
+          {% set sl = states('input_number.trade_stop_loss')|float(0) %}
+          {% if entry > 0 and sl > 0 and entry != sl %}
+            {% set risk_amount = balance * (risk_pct / 100) %}
+            {% set pips = ((entry - sl)|abs * 10000)|round(1) %}
+            {% set lot_size = (risk_amount / (pips * 10))|round(2) %}
+            {{ lot_size }}
+          {% else %}
+            0.1
+          {% endif %}
+        unit_of_measurement: "lots"
+        icon: mdi:calculator
+
+      - name: "Trading Risk Reward Ratio"
+        unique_id: trading_risk_reward_ratio
+        state: >
+          {% set entry = states('input_number.trade_entry_price')|float(0) %}
+          {% set sl = states('input_number.trade_stop_loss')|float(0) %}
+          {% set tp1 = states('input_number.trade_take_profit_1')|float(0) %}
+          {% if entry > 0 and sl > 0 and tp1 > 0 %}
+            {% set risk = (entry - sl)|abs %}
+            {% set reward = (tp1 - entry)|abs %}
+            {% if risk > 0 %}
+              {{ (reward / risk)|round(2) }}
+            {% else %}
+              0
+            {% endif %}
+          {% else %}
+            0
+          {% endif %}
+        icon: mdi:chart-box
+
+      - name: "Trading Session Active"
+        unique_id: trading_session_active
+        state: >
+          {% set h = now().hour %}
+          {% set london_only = is_state('input_boolean.trading_london_session_only', 'on') %}
+          {% if london_only %}
+            {% if h >= 8 and h < 16 %}London{% else %}Closed{% endif %}
+          {% else %}
+            {% if h >= 0 and h < 8 %}Asian
+            {% elif h >= 8 and h < 16 %}London
+            {% elif h >= 13 and h < 21 %}New York
+            {% else %}Sydney{% endif %}
+          {% endif %}
+        icon: >
+          {% if 'Closed' in this.state %}mdi:clock-remove
+          {% else %}mdi:clock-check{% endif %}
+
+      - name: "Trading Signals Summary"
+        unique_id: trading_signals_summary
+        state: >
+          {% set ns = namespace(total=0, buy=0, sell=0, high=0) %}
+          {% for entity in states.sensor %}
+            {% if entity.entity_id.startswith('sensor.trading_signal_') %}
+              {% set ns.total = ns.total + 1 %}
+              {% if entity.state == 'BUY' %}
+                {% set ns.buy = ns.buy + 1 %}
+              {% elif entity.state == 'SELL' %}
+                {% set ns.sell = ns.sell + 1 %}
+              {% endif %}
+              {% if entity.attributes.confidence|default(0)|float > 80 %}
+                {% set ns.high = ns.high + 1 %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.total }} signálů ({{ ns.buy }}↑ {{ ns.sell }}↓) | {{ ns.high }} silných
+        icon: mdi:signal
+
+  # --- SNAPSHOT/Diff – TRIGGERED TEMPLATE SENSORY ---
+  - trigger:
+      - platform: state
+        entity_id: sensor.smartmeter_import_energy_daily
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: sm_imp_kwh_snap
+        unit_of_measurement: "kWh"
+        state: "{{ states('sensor.smartmeter_import_energy_daily') | float(0) }}"
+      - name: sm_imp_kc_snap
+        unit_of_measurement: "CZK"
+        state: >
+          {% set v = states('sensor.smartmeter_import_cost_daily_czk') %}
+          {{ (v | float) if v not in ['unknown','unavailable','none','None',''] else 0 }}
+      - name: gw_imp_kwh_snap
+        unit_of_measurement: "kWh"
+        state: >
+          {% set v = states('sensor.goodwe_import_daily') %}
+          {{ (v | float) if v not in ['unknown','unavailable','none','None',''] else 0 }}
+      - name: gw_imp_kc_snap
+        unit_of_measurement: "CZK"
+        state: >
+          {% set v = states('sensor.goodwe_import_cost_daily_czk') %}
+          {{ (v | float) if v not in ['unknown','unavailable','none','None',''] else 0 }}
+      - name: diff_imp_kwh_snap
+        unit_of_measurement: "kWh"
+        state: >
+          {{ (states('sensor.smartmeter_import_energy_daily') | float(0))
+             - (states('sensor.sm_imp_kwh_snap') | float(0)) }}
+      - name: diff_imp_kc_snap
+        unit_of_measurement: "CZK"
+        state: >
+          {% set sm = states('sensor.smartmeter_import_cost_daily_czk') %}
+          {% set gw = states('sensor.goodwe_import_cost_daily_czk') %}
+          {% set sm_val = (sm | float) if sm not in ['unknown','unavailable','none','None',''] else 0 %}
+          {% set gw_val = (gw | float) if gw not in ['unknown','unavailable','none','None',''] else 0 %}
+          {{ (sm_val - gw_val) | round(2) }}
+      - name: imp_last_update
+        state: "{{ now().isoformat() }}"
+        device_class: timestamp
+
+  - trigger:
+      - platform: state
+        entity_id: sensor.smartmeter_export_energy_daily
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: sm_exp_kwh_snap
+        unit_of_measurement: "kWh"
+        state: "{{ states('sensor.smartmeter_export_energy_daily') | float(0) }}"
+      - name: sm_exp_kc_snap
+        unit_of_measurement: "CZK"
+        state: >
+          {% set v = states('sensor.smartmeter_export_revenue_daily_czk') %}
+          {{ (v | float) if v not in ['unknown','unavailable','none','None',''] else 0 }}
+      - name: gw_exp_kwh_snap
+        unit_of_measurement: "kWh"
+        state: >
+          {% set v = states('sensor.goodwe_export_daily') %}
+          {{ (v | float) if v not in ['unknown','unavailable','none','None',''] else 0 }}
+      - name: gw_exp_kc_snap
+        unit_of_measurement: "CZK"
+        state: >
+          {% set v = states('sensor.goodwe_export_revenue_daily_czk') %}
+          {{ (v | float) if v not in ['unknown','unavailable','none','None',''] else 0 }}
+      - name: diff_exp_kwh_snap
+        unit_of_measurement: "kWh"
+        state: >
+          {{ (states('sensor.smartmeter_export_energy_daily') | float(0))
+             - (states('sensor.sm_exp_kwh_snap') | float(0)) }}
+      - name: diff_exp_kc_snap
+        unit_of_measurement: "CZK"
+        state: >
+          {% set sm = states('sensor.smartmeter_export_revenue_daily_czk') %}
+          {% set gw = states('sensor.goodwe_export_revenue_daily_czk') %}
+          {% set sm_val = (sm | float) if sm not in ['unknown','unavailable','none','None',''] else 0 %}
+          {% set gw_val = (gw | float) if gw not in ['unknown','unavailable','none','None',''] else 0 %}
+          {{ (sm_val - gw_val) | round(2) }}
+      - name: exp_last_update
+        state: "{{ now().isoformat() }}"
+        device_class: timestamp
+
+  - trigger:
+      - platform: state
+        entity_id: sensor.smartmeter_import_energy_daily
+    sensor:
+      - name: diff_imp_kwh
+        unit_of_measurement: "kWh"
+        state: >
+          {% set sm = states('sensor.smartmeter_import_energy_daily') %}
+          {% set gw = states('sensor.goodwe_import_daily') %}
+          {% set sm_val = (sm | float) if sm not in ['unknown','unavailable','none','None',''] else 0 %}
+          {% set gw_val = (gw | float) if gw not in ['unknown','unavailable','none','None',''] else 0 %}
+          {{ sm_val - gw_val }}
+      - name: diff_imp_kc
+        unit_of_measurement: "CZK"
+        state: >
+          {% set sm = states('sensor.smartmeter_import_cost_daily_czk') %}
+          {% set gw = states('sensor.goodwe_import_cost_daily_czk') %}
+          {% set sm_val = (sm | float) if sm not in ['unknown','unavailable','none','None',''] else 0 %}
+          {% set gw_val = (gw | float) if gw not in ['unknown','unavailable','none','None',''] else 0 %}
+          {{ sm_val - gw_val }}
+
+  - trigger:
+      - platform: state
+        entity_id: sensor.smartmeter_export_energy_daily
+    sensor:
+      - name: diff_exp_kwh
+        unit_of_measurement: "kWh"
+        state: >
+          {% set sm = states('sensor.smartmeter_export_energy_daily') %}
+          {% set gw = states('sensor.goodwe_export_daily') %}
+          {% set sm_val = (sm | float) if sm not in ['unknown','unavailable','none','None',''] else 0 %}
+          {% set gw_val = (gw | float) if gw not in ['unknown','unavailable','none','None',''] else 0 %}
+          {{ sm_val - gw_val }}
+      - name: diff_exp_kc
+        unit_of_measurement: "CZK"
+        state: >
+          {% set sm = states('sensor.smartmeter_export_revenue_daily_czk') %}
+          {% set gw = states('sensor.goodwe_export_revenue_daily_czk') %}
+          {% set sm_val = (sm | float) if sm not in ['unknown','unavailable','none','None',''] else 0 %}
+          {% set gw_val = (gw | float) if gw not in ['unknown','unavailable','none','None',''] else 0 %}
+          {{ sm_val - gw_val }}
+
+  - trigger:
+      - platform: time_pattern
+        hours: "/1"
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "SmartMeter Balance Monthly (CZK)"
+        unique_id: smartmeter_balance_monthly_czk
+        state: >
+          {% set imp   = states('sensor.smartmeter_import_cost_monthly_czk')|float(0) %}
+          {% set exp   = states('sensor.smartmeter_export_revenue_monthly_czk')|float(0) %}
+          {% set fix_d = states('input_number.daily_fixed_fee')|float(0) %}
+          {% set days  = now().day %}
+          {{ (exp - imp - fix_d * days) | round(2) }}
+        unit_of_measurement: "CZK"
+        icon: mdi:scale-balance
+
+  - trigger:
+      - platform: time_pattern
+        minutes: "59"
+        seconds: "50"
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "Import Price – last hour"
+        unique_id: import_price_last_hour
+        state: "{{ states('sensor.real_import_price')|float(0) }}"
+        unit_of_measurement: "CZK/kWh"
+        icon: mdi:cash
+
+      - name: "Export Price – last hour"
+        unique_id: export_price_last_hour
+        state: "{{ states('sensor.real_export_price')|float(0) }}"
+        unit_of_measurement: "CZK/kWh"
+        icon: mdi:cash
+
+  - trigger:
+      - platform: state
+        entity_id: sensor.vt_hodinova
+        to: "0"
+      - platform: state
+        entity_id: sensor.nt_hodinova
+        to: "0"
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "SmartMeter Import Cost Cumulative"
+        unique_id: smartmeter_import_cost_cumulative
+        state: >
+          {% set prev = this.state|float(0) %}
+          {% if trigger.platform == 'state' and trigger.from_state %}
+            {% set kwh = trigger.from_state.state|float(0) %}
+            {% set price = states('sensor.import_price_last_hour')|float(0) %}
+            {{ (prev + kwh * price)|round(2) }}
+          {% else %}
+            {{ prev }}
+          {% endif %}
+        unit_of_measurement: "CZK"
+        icon: mdi:cash-plus
+
+  - trigger:
+      - platform: state
+        entity_id: sensor.export_hodinovy
+        to: "0"
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "SmartMeter Export Revenue Cumulative"
+        unique_id: smartmeter_export_revenue_cumulative
+        state: >
+          {% set prev = this.state|float(0) %}
+          {% if trigger.platform == 'state' and trigger.from_state %}
+            {% set kwh = trigger.from_state.state|float(0) %}
+            {% set price = states('sensor.export_price_last_hour')|float(0) %}
+            {{ (prev + kwh * price)|round(2) }}
+          {% else %}
+            {{ prev }}
+          {% endif %}
+        unit_of_measurement: "CZK"
+        icon: mdi:cash-plus
+
+  - trigger:
+      - platform: time_pattern
+        hours: "/1"
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "SmartMeter Import Cost Monthly incl. Fix (display)"
+        unique_id: sm_import_cost_monthly_incl_fix_display
+        state: >
+          {% set var_disp = states('sensor.smartmeter_import_cost_monthly_display')|float(0) %}
+          {% set fix      = states('input_number.daily_fixed_fee')|float(0) %}
+          {% set days     = now().day %}
+          {{ (var_disp + fix * days) | round(2) }}
+        unit_of_measurement: "CZK"
+        icon: mdi:cash-multiple
+
+# ========================================
+# INTEGRACE W → kWh (z Energy Buy/Sell)
+# ========================================
+sensor:
+  - platform: integration
+    source: sensor.energy_buy
+    name: "Grid Import kWh (phases)"
+    unique_id: grid_import_kwh_phases
+    unit_prefix: k
+    round: 3
+    method: trapezoidal
+    unit_time: h
+
+  - platform: integration
+    source: sensor.energy_sell
+    name: "Grid Export kWh (phases)"
+    unique_id: grid_export_kwh_phases
+    unit_prefix: k
+    round: 3
+    method: trapezoidal
+    unit_time: h
+
+  - platform: integration
+    source: sensor.house_consumption
+    name: "House Consumption Total kWh"
+    unique_id: house_consumption_total_kwh
+    unit_prefix: k
+    round: 3
+    method: trapezoidal
+    unit_time: h
+
+  - platform: integration
+    source: sensor.goodwe_import_cost_rate
+    name: "GoodWe Import Cost (integrated)"
+    unique_id: goodwe_import_cost_integrated
+    method: trapezoidal
+    unit_time: h
+    round: 2
+
+  - platform: integration
+    source: sensor.goodwe_export_revenue_rate
+    name: "GoodWe Export Revenue (integrated)"
+    unique_id: goodwe_export_revenue_integrated
+    method: trapezoidal
+    unit_time: h
+    round: 2
+
+  - platform: time_date
+    display_options:
+      - "time" # HH:MM - aktualizace každou minutu
+      - "date" # YYYY-MM-DD
+      - "date_time" # YYYY-MM-DD, HH:MM
+
+  - platform: command_line
+    name: DAX M1 REGIME Raw
+    unique_id: dax_m1_regime_raw
+    scan_interval: 10
+    command: "tail -n 2000 /config/appdaemon/appdaemon.log | awk '/\\[REGIME\\] DAX M1/{line=$0} END{print line}'"
+
+  - platform: command_line
+    name: NASDAQ M1 REGIME Raw
+    unique_id: nasdaq_m1_regime_raw
+    scan_interval: 10
+    command: "tail -n 2000 /config/appdaemon/appdaemon.log | awk '/\\[REGIME\\] NASDAQ M1/{line=$0} END{print line}'"
+
+# ========================================
+# UTILITY METERS – agregace
+# ========================================
+utility_meter:
+  # GoodWe
+  goodwe_import_hourly:
+    source: sensor.grid_import_kwh_phases
+    cycle: hourly
+  goodwe_export_hourly:
+    source: sensor.grid_export_kwh_phases
+    cycle: hourly
+  goodwe_import_daily:
+    source: sensor.grid_import_kwh_phases
+    cycle: daily
+  goodwe_export_daily:
+    source: sensor.grid_export_kwh_phases
+    cycle: daily
+  goodwe_import_cost_daily_czk:
+    source: sensor.goodwe_import_cost_integrated
+    cycle: daily
+  goodwe_export_revenue_daily_czk:
+    source: sensor.goodwe_export_revenue_integrated
+    cycle: daily
+
+  # Smart Meter
+  vt_hodinova:
+    source: sensor.vt_vysoka_sazba
+    cycle: hourly
+  nt_hodinova:
+    source: sensor.nz_nizka_sazba
+    cycle: hourly
+  vt_denni:
+    source: sensor.vt_vysoka_sazba
+    cycle: daily
+  nt_denni:
+    source: sensor.nz_nizka_sazba
+    cycle: daily
+  vt_mesicni:
+    source: sensor.vt_vysoka_sazba
+    cycle: monthly
+  nt_mesicni:
+    source: sensor.nz_nizka_sazba
+    cycle: monthly
+  export_hodinovy:
+    source: sensor.ex_export
+    cycle: hourly
+  export_denni:
+    source: sensor.ex_export
+    cycle: daily
+  export_mesicni:
+    source: sensor.ex_export
+    cycle: monthly
+  smartmeter_import_cost_daily_czk:
+    source: sensor.smartmeter_import_cost_cumulative
+    cycle: daily
+  smartmeter_export_revenue_daily_czk:
+    source: sensor.smartmeter_export_revenue_cumulative
+    cycle: daily
+  smartmeter_import_cost_monthly_czk:
+    source: sensor.smartmeter_import_cost_cumulative
+    cycle: monthly
+  smartmeter_export_revenue_monthly_czk:
+    source: sensor.smartmeter_export_revenue_cumulative
+    cycle: monthly
+
+# ========================================
+# ZÁKLADNÍ SYSTÉM A UI
+# ========================================
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+    - 100.64.0.0/10
+
+homeassistant:
+  name: Můj Domov
+  latitude: 50.78802
+  longitude: 15.07076
+  elevation: 470
+  unit_system: metric
+  time_zone: Europe/Prague
+
+default_config:
+
+recorder:
+  purge_keep_days: 365
+  # CRITICAL FIX: Exclude high-frequency trading entities to prevent database bloat
+  exclude:
+    entity_globs:
+      # High-frequency trading data (updates every 5 seconds)
+      - sensor.*_volume_zscore
+      - sensor.*_tick_data
+      - sensor.*_microstructure
+      - sensor.*_liquidity_score
+      - sensor.*_vwap_distance
+    entities:
+      # Event queue metrics (updates frequently)
+      - sensor.event_queue_metrics
+    # Note: Keep important metrics like account_balance, daily_pnl, regime, swing_quality
+
+frontend:
+  themes: !include_dir_merge_named themes
+  extra_module_url:
+    - /local/card-mod.js
+
+lovelace:
+  resources:
+    - url: /hacsfiles/mini-graph-card/mini-graph-card.js
+      type: module
+    - url: /hacsfiles/apexcharts-card/apexcharts-card.js
+      type: module
+    - url: /hacsfiles/vertical-stack-in-card/vertical-stack-in-card.js
+      type: module
+    - url: /hacsfiles/auto-entities/auto-entities.js
+      type: module
+    - url: /hacsfiles/multiple-entity-row/multiple-entity-row.js
+      type: module
+    - url: /hacsfiles/lovelace-template-entity-row/lovelace-template-entity-row.js
+      type: module
+#  dashboards:
+#   trading-desk: # ← URL path s pomlčkou (bude /trading-desk)
+#      mode: yaml
+#      title: Trading Assistant # název v levém menu
+#      icon: mdi:finance
+#      show_in_sidebar: true
+#      filename: dashboards/trading_desk/trading_desk.yaml # cesta k souboru s dashboardem
+
+tts:
+  - platform: google_translate
+
+automation:
+  # === ENERGY AUTOMATIONS ===
+  - alias: Reset MTD offsets on 1st day
+    trigger:
+      - platform: time
+        at: "00:01:00"
+    condition:
+      - condition: template
+        value_template: "{{ now().day == 1 }}"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id:
+            - input_number.mtd_import_cost_offset
+            - input_number.mtd_export_revenue_offset
+            - input_number.mtd_import_energy_offset_kwh
+            - input_number.mtd_export_energy_offset_kwh
+        data:
+          value: 0
+
+  # === TRADING AUTOMATIONS ===
+  - alias: "Trading: High Confidence Signal Alert"
+    id: trading_high_confidence_alert
+    mode: parallel
+
+    trigger:
+      - platform: event
+        event_type: ctrader_signal # nový bohatý event z enginu
+      - platform: event
+        event_type: price_action_signal # zpětná kompatibilita (když by přišel starý event)
+
+    variables:
+      d: "{{ trigger.event.data }}" # zkratka na payload
+
+    condition:
+      - condition: state
+        entity_id: input_boolean.trading_signals_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.trading_notifications_enabled
+        state: "on"
+      # min. confidence podle tvého slideru
+      - condition: template
+        value_template: >
+          {{ (d.confidence | default(d.strength) | float(0)) >=
+            (states('input_number.trading_min_confidence') | float(70)) }}
+      # volitelně min. edge_score (můžeš upravit číslo nebo později udělat vlastní input_number)
+      - condition: template
+        value_template: >
+          {{ (d.edge_score | float(0)) >= 60 }}
+
+    action:
+      - service: notify.mobile_app_iphone_jiri
+        data:
+          title: >-
+            {{ d.symbol }} {{ d.direction }}
+            ({{ (d.confidence | default(d.strength) | float(0)) | round(0) }}%)
+            • ⭐ {{ (d.edge_score | float(0)) | round(0) }}
+          message: >-
+            📍 Entry {{ d.entry }} | SL {{ d.stop_loss }} ({{ d.risk_pips | default(0) | round(1) }}p)
+            🎯 TP: {{ d.rr1_pips | default(0) | round(1) }}/{{ d.rr2_pips | default(0) | round(1) }}/{{ d.rr3_pips | default(0) | round(1) }}p
+            📦 Lots: {{ d.lots_risk if d.lots_risk is not none else d.lots_default }}
+            {{ d.pattern }} | {{ d.structure }} | TF {{ d.tf }}
+          data:
+            push:
+              sound:
+                name: "default"
+                critical: 1
+                volume: 0.8
+              badge: 1
+              interruption-level: "active"
+            # u mobil_app je spolehlivější klíč "url" (otevře pohled v HA)
+            url: /lovelace/trading
+            tag: "trading-{{ d.ticket_id | default('') }}"
+
+      - service: persistent_notification.create
+        data:
+          title: "Trading Ticket – {{ d.symbol }} {{ d.direction }}"
+          message: >-
+            Pattern: {{ d.pattern }} | Structure: {{ d.structure }} | TF {{ d.tf }}
+            Entry: {{ d.entry }} | SL: {{ d.stop_loss }} ({{ d.risk_pips | default(0) | round(1) }} pips)
+            TP pips: {{ d.rr1_pips | default(0) | round(1) }}/{{ d.rr2_pips | default(0) | round(1) }}/{{ d.rr3_pips | default(0) | round(1) }}
+            Edge: {{ d.edge_score | default(0) | round(0) }}
+          notification_id: "trading_{{ d.ticket_id | default('') }}"
+
+  - alias: "Trading: Market Structure Change Alert"
+    id: trading_market_structure_alert
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.trading_eurusd_structure
+          - sensor.trading_gbpusd_structure
+          - sensor.trading_nasdaq_structure
+          - sensor.trading_dax_structure
+    condition:
+      - condition: template
+        value_template: "{{ trigger.from_state.state != trigger.to_state.state }}"
+      - condition: state
+        entity_id: input_boolean.trading_signals_enabled
+        state: "on"
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "📊 Market Structure Change"
+          message: |
+            Symbol: {{ trigger.entity_id.split('_')[1]|upper }}
+            From: {{ trigger.from_state.state }}
+            To: {{ trigger.to_state.state }}
+            Time: {{ now().strftime('%H:%M') }}
+          notification_id: "market_structure_{{ trigger.entity_id.split('_')[1] }}"
+
+  - alias: "Trading: Daily Performance Report"
+    id: trading_daily_report
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.trading_signals_enabled
+        state: "on"
+    action:
+      - service: notify.mobile_app_iphone_jiri
+        data:
+          title: "📈 Trading Daily Report"
+          message: |
+            Signals Today: {{ states('sensor.trading_active_signals') }}
+            Connection: {{ states('sensor.trading_connection_status') }}
+            Ticks: {{ states('sensor.trading_ticks_total') }}
+
+  # === WATCHDOG AUTOMATIONS (Dead Man's Switch) ===
+  - alias: "Trading Watchdog Alert"
+    description: "Alert when trading bot stops responding (watchdog timeout)"
+    id: trading_watchdog_alert
+    trigger:
+      - platform: state
+        entity_id: input_boolean.trading_watchdog
+        to: 'off'
+        for:
+          minutes: 3
+      - platform: state
+        entity_id: input_boolean.trading_watchdog
+        to: 'on'
+        for:
+          minutes: 3
+    condition:
+      # Only trigger if watchdog hasn't changed for 3+ minutes
+      - condition: template
+        value_template: >
+          {{ (as_timestamp(now()) - as_timestamp(states('input_boolean.trading_watchdog').last_changed)) > 180 }}
+      - condition: state
+        entity_id: input_boolean.auto_trading_enabled
+        state: 'on'
+    action:
+      - service: notify.mobile_app_iphone_jiri
+        data:
+          title: "🚨 TRADING BOT DOWN!"
+          message: "Trading bot watchdog timeout - bot hasn't updated for 3+ minutes. Check immediately!"
+          data:
+            push:
+              sound:
+                name: "default"
+                critical: 1
+                volume: 1.0
+              badge: 1
+              interruption-level: "critical"
+            priority: high
+            channel: critical_alerts
+      
+      # Optional: Activate kill switch if enabled
+      - condition: template
+        value_template: "{{ is_state('input_boolean.trading_kill_switch_enabled', 'on') }}"
+      - service: input_boolean.turn_on
+        entity_id: input_boolean.trading_kill_switch
+      - service: notify.mobile_app_iphone_jiri
+        data:
+          title: "🛑 KILL SWITCH ACTIVATED"
+          message: "Trading kill switch activated due to watchdog timeout"
+          data:
+            push:
+              sound:
+                name: "default"
+                critical: 1
+                volume: 1.0
+              badge: 1
+              interruption-level: "critical"
+            priority: critical
+            channel: critical_alerts
+
+  # Optional: Kill Switch Handler (closes all positions)
+  - alias: "Trading Kill Switch Handler"
+    description: "Close all positions when kill switch is activated"
+    id: trading_kill_switch_handler
+    trigger:
+      - platform: state
+        entity_id: input_boolean.trading_kill_switch
+        to: 'on'
+    condition:
+      - condition: state
+        entity_id: input_boolean.auto_trading_enabled
+        state: 'on'
+    action:
+      - service: notify.mobile_app_iphone_jiri
+        data:
+          title: "🛑 KILL SWITCH: Closing All Positions"
+          message: "Kill switch activated - all positions will be closed"
+          data:
+            push:
+              sound:
+                name: "default"
+                critical: 1
+                volume: 1.0
+              badge: 1
+              interruption-level: "critical"
+            priority: critical
+            channel: critical_alerts
+      
+      # Note: Actual position closing should be handled by trading bot
+      # listening to input_boolean.trading_kill_switch state change
+      # This automation just sends notification
+
+script:
+  # === ENERGY SCRIPTS ===
+  test_trading_notification:
+    alias: Test Trading Notifikace
+    sequence:
+      - service: notify.mobile_app_iphone_jiri
+        data:
+          title: "📈 EURUSD - BUY"
+          message: |
+            🔥 SILNÁ (85%)
+            Entry: 1.08654
+            SL: 25.0 | TP: 50.0
+            R:R 1:2.0
+          data:
+            push:
+              sound:
+                name: "default"
+                critical: 0
+                volume: 0.8
+              badge: 1
+              interruption-level: "passive"
+
+      - service: persistent_notification.create
+        data:
+          title: "🧪 Test odeslán"
+          message: |
+            Notifikace odeslána na iPhone
+            Čas: {{ now().strftime('%H:%M:%S') }}
+
+  set_mtd_offsets:
+    alias: "MTD: Nastavit offsety (kWh & CZK) podle cílových hodnot"
+    description: Zadej cílové MTD hodnoty; skript spočítá rozdíl a nastaví offsety.
+    fields:
+      target_import_kwh:
+        name: Cílový MTD Import (kWh)
+        required: false
+        selector: { number: { min: 0, max: 100000, step: 0.001 } }
+      target_export_kwh:
+        name: Cílový MTD Export (kWh)
+        required: false
+        selector: { number: { min: 0, max: 100000, step: 0.001 } }
+      target_import_czk:
+        name: Cílové MTD Náklady (CZK)
+        required: false
+        selector: { number: { min: -100000, max: 100000, step: 0.01 } }
+      target_export_czk:
+        name: Cílové MTD Výnosy (CZK)
+        required: false
+        selector: { number: { min: -100000, max: 100000, step: 0.01 } }
+    sequence:
+      - variables:
+          t_imp_kwh: "{{ (target_import_kwh | default(states('sensor.smartmeter_import_energy_monthly'))) | float(0) }}"
+          t_exp_kwh: "{{ (target_export_kwh | default(states('sensor.export_mesicni'))) | float(0) }}"
+          t_imp_czk: "{{ (target_import_czk | default(states('sensor.smartmeter_import_cost_monthly_czk'))) | float(0) }}"
+          t_exp_czk: "{{ (target_export_czk | default(states('sensor.smartmeter_export_revenue_monthly_czk'))) | float(0) }}"
+          c_imp_kwh: "{{ states('sensor.smartmeter_import_energy_monthly') | float(0) }}"
+          c_exp_kwh: "{{ states('sensor.export_mesicni') | float(0) }}"
+          c_imp_czk: "{{ states('sensor.smartmeter_import_cost_monthly_czk') | float(0) }}"
+          c_exp_czk: "{{ states('sensor.smartmeter_export_revenue_monthly_czk') | float(0) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: "input_number.mtd_import_energy_offset_kwh"
+        data:
+          value: "{{ (t_imp_kwh - c_imp_kwh) | round(3) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: "input_number.mtd_export_energy_offset_kwh"
+        data:
+          value: "{{ (t_exp_kwh - c_exp_kwh) | round(3) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: "input_number.mtd_import_cost_offset"
+        data:
+          value: "{{ (t_imp_czk - c_imp_czk) | round(2) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: "input_number.mtd_export_revenue_offset"
+        data:
+          value: "{{ (t_exp_czk - c_exp_czk) | round(2) }}"
+    mode: single
+
+  # === TRADING SCRIPTS ===
+  trading_copy_signal_to_clipboard:
+    alias: "Trading: Copy Signal to Clipboard"
+    fields:
+      signal_entity:
+        description: "Signal entity ID"
+        required: true
+    sequence:
+      - service: notify.persistent_notification
+        data:
+          title: "📋 Trade Setup Copied"
+          message: |
+            Symbol: {{ state_attr(signal_entity, 'symbol') }}
+            Direction: {{ states(signal_entity) }}
+            Entry: {{ state_attr(signal_entity, 'entry') }}
+            SL: {{ state_attr(signal_entity, 'stop_loss') }}
+            TP1: {{ state_attr(signal_entity, 'tp1') }}
+            TP2: {{ state_attr(signal_entity, 'tp2') }}
+            TP3: {{ state_attr(signal_entity, 'tp3') }}
+            Pattern: {{ state_attr(signal_entity, 'pattern') }}
+            Confidence: {{ state_attr(signal_entity, 'confidence') }}%
+
+  trading_calculate_position:
+    alias: "Trading: Calculate Position Size"
+    sequence:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.trade_lot_size
+        data:
+          value: "{{ states('sensor.trading_position_size_calculator') }}"
+      - service: notify.persistent_notification
+        data:
+          title: "📊 Position Calculated"
+          message: |
+            Lot Size: {{ states('sensor.trading_position_size_calculator') }}
+            Risk: {{ states('input_number.trading_risk_percent') }}%
+            R:R Ratio: 1:{{ states('sensor.trading_risk_reward_ratio') }}
+
+  trading_clear_signals:
+    alias: "Trading - Vymazat signály"
+    sequence:
+      - service: python_script.clear_trading_signals
+
+  ctrader_send_last_ticket:
+    alias: "cTrader: Send last ticket"
+    mode: single
+    sequence:
+      - variables:
+          ent: sensor.trading_last_ticket
+          lots: "{{ states('input_number.ctrader_lots') | float(0.10) }}"
+      - condition: template
+        value_template: "{{ states(ent) == 'READY' }}"
+      - service: event.fire
+        data:
+          event_type: ctrader_place_order
+          event_data:
+            symbol: "{{ state_attr(ent, 'symbol') }}"
+            direction: "{{ state_attr(ent, 'direction') }}"
+            lots: "{{ lots }}"
+            entry: "{{ state_attr(ent, 'entry') }}"
+            stop_loss: "{{ state_attr(ent, 'stop_loss') }}"
+            take_profits:
+              - "{{ state_attr(ent, 'tp1') }}"
+              - "{{ state_attr(ent, 'tp2') }}"
+              - "{{ state_attr(ent, 'tp3') }}"
+            pip_pos: "{{ state_attr(ent, 'pip_pos') }}"
+
+            scene: !include scenes.yaml

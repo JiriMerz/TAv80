@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 Time-Based Symbol Manager for MVP Auto-Trading
-Handles DAX (09:00-14:30) and NASDAQ (14:30-22:00) switching
+    Handles DAX (09:00-15:30) and NASDAQ (15:30-22:00) switching
 
 MVP Implementation - Sprint 3
 """
 
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timezone
+import pytz
 from typing import Optional, Dict, Any
 from enum import Enum
 
@@ -26,8 +27,8 @@ class TimeBasedSymbolManager:
     Manages active trading symbol based on Prague timezone
     
     Schedule:
-    - 09:00-14:30: DAX only
-    - 14:30-22:00: NASDAQ only  
+    - 09:00-15:30: DAX only
+    - 15:30-22:00: NASDAQ only  
     - 22:00-09:00: No trading (CLOSED)
     """
     
@@ -36,8 +37,8 @@ class TimeBasedSymbolManager:
         
         # Trading schedule (Prague time)
         self.dax_start = time(9, 0)      # 09:00
-        self.dax_end = time(14, 30)      # 14:30 (UPDATED)
-        self.nasdaq_start = time(14, 30)  # 14:30 (UPDATED FROM 15:30)
+        self.dax_end = time(15, 30)      # 15:30 (DAX ends when NASDAQ starts)
+        self.nasdaq_start = time(15, 30)  # 15:30 (Prague time)
         self.nasdaq_end = time(22, 0)    # 22:00
         
         # State tracking
@@ -45,30 +46,78 @@ class TimeBasedSymbolManager:
         self.last_check_time: Optional[datetime] = None
         self.session_switched: bool = False
         
+        # CRITICAL FIX: Store last broker timestamp
+        self.last_broker_timestamp: Optional[datetime] = None
+        self.broker_time_offset: Optional[float] = None  # Offset between broker time and local time
+        
         logger.info(f"[TIME_MANAGER] Initialized with schedule:")
         logger.info(f"  DAX: {self.dax_start.strftime('%H:%M')}-{self.dax_end.strftime('%H:%M')}")
         logger.info(f"  NASDAQ: {self.nasdaq_start.strftime('%H:%M')}-{self.nasdaq_end.strftime('%H:%M')}")
+        logger.info(f"  Broker time sync: Enabled")
+    
+    def update_broker_timestamp(self, broker_timestamp: datetime):
+        """
+        CRITICAL FIX: Update broker timestamp for time-based decisions
+        
+        Args:
+            broker_timestamp: Timestamp from broker (SPOT_EVENT or BAR_DATA)
+        """
+        if broker_timestamp:
+            self.last_broker_timestamp = broker_timestamp
+            # Calculate offset between broker time and local time
+            # Ensure both are timezone-aware
+            if broker_timestamp.tzinfo is None:
+                # If broker timestamp is naive, assume UTC
+                broker_timestamp = broker_timestamp.replace(tzinfo=timezone.utc)
+            local_time = datetime.now(timezone.utc)
+            self.broker_time_offset = (broker_timestamp - local_time).total_seconds()
+            if hasattr(self, 'logger'):
+                self.logger.debug(f"[TIME_MANAGER] Broker timestamp updated: {broker_timestamp}, offset: {self.broker_time_offset:.1f}s")
     
     def get_active_session(self, current_time: datetime = None) -> TradingSession:
         """
         Determine which trading session is currently active
         
+        CRITICAL FIX: Uses broker timestamp if available, otherwise local time
+        
         Args:
-            current_time: Time to check (default: now)
+            current_time: Time to check (default: broker time or now)
             
         Returns:
             TradingSession enum (DAX/NASDAQ/CLOSED)
         """
+        # CRITICAL FIX: Use broker timestamp if available
         if current_time is None:
-            current_time = datetime.now()
+            if self.last_broker_timestamp:
+                current_time = self.last_broker_timestamp
+                # Convert to Prague timezone if needed
+                if current_time.tzinfo:
+                    prague_tz = pytz.timezone('Europe/Prague')
+                    current_time = current_time.astimezone(prague_tz)
+                logger.debug(f"[TIME_MANAGER] Using broker timestamp: {current_time}")
+            else:
+                # Use current time in Prague timezone
+                prague_tz = pytz.timezone('Europe/Prague')
+                current_time = datetime.now(prague_tz)
+                logger.debug(f"[TIME_MANAGER] Using Prague time: {current_time}")
+        else:
+            # Ensure timezone-aware and in Prague timezone
+            if current_time.tzinfo is None:
+                # Assume it's already in Prague timezone (naive)
+                prague_tz = pytz.timezone('Europe/Prague')
+                current_time = prague_tz.localize(current_time)
+            elif str(current_time.tzinfo) != 'Europe/Prague':
+                # Convert to Prague timezone
+                prague_tz = pytz.timezone('Europe/Prague')
+                current_time = current_time.astimezone(prague_tz)
             
         current_time_only = current_time.time()
         
-        # DAX session: 09:00 - 14:30
+        # DAX session: 09:00 - 15:30
         if self.dax_start <= current_time_only < self.dax_end:
             return TradingSession.DAX
             
-        # NASDAQ session: 14:30 - 22:00
+        # NASDAQ session: 15:30 - 22:00
         elif self.nasdaq_start <= current_time_only < self.nasdaq_end:
             return TradingSession.NASDAQ
             
@@ -80,12 +129,21 @@ class TimeBasedSymbolManager:
         """
         Get the symbol that should be traded at given time
         
+        CRITICAL FIX: Uses broker timestamp if available
+        
         Args:
-            current_time: Time to check (default: now)
+            current_time: Time to check (default: broker time or now)
             
         Returns:
             Symbol name (DAX/NASDAQ) or None if closed
         """
+        # CRITICAL FIX: Use broker timestamp if available
+        if current_time is None:
+            if self.last_broker_timestamp:
+                current_time = self.last_broker_timestamp
+            else:
+                current_time = datetime.now()
+        
         session = self.get_active_session(current_time)
         
         if session == TradingSession.DAX:
@@ -99,8 +157,10 @@ class TimeBasedSymbolManager:
         """
         Check if trading session has changed since last check
         
+        CRITICAL FIX: Uses broker timestamp if available
+        
         Args:
-            current_time: Time to check (default: now)
+            current_time: Time to check (default: broker time or now)
             
         Returns:
             Dict with session change info:
@@ -113,8 +173,12 @@ class TimeBasedSymbolManager:
                 'action_required': str  # 'close_positions' or 'continue'
             }
         """
+        # CRITICAL FIX: Use broker timestamp if available
         if current_time is None:
-            current_time = datetime.now()
+            if self.last_broker_timestamp:
+                current_time = self.last_broker_timestamp
+            else:
+                current_time = datetime.now()
             
         new_session = self.get_active_session(current_time)
         old_session = self.current_session
@@ -219,13 +283,22 @@ class TimeBasedSymbolManager:
         Get comprehensive info about current session
         
         Args:
-            current_time: Time to check (default: now)
+            current_time: Time to check in Prague timezone (default: now in Prague)
             
         Returns:
             Dict with session information
         """
         if current_time is None:
-            current_time = datetime.now()
+            prague_tz = pytz.timezone('Europe/Prague')
+            current_time = datetime.now(prague_tz)
+        else:
+            # Ensure timezone-aware and in Prague timezone
+            if current_time.tzinfo is None:
+                prague_tz = pytz.timezone('Europe/Prague')
+                current_time = prague_tz.localize(current_time)
+            elif str(current_time.tzinfo) != 'Europe/Prague':
+                prague_tz = pytz.timezone('Europe/Prague')
+                current_time = current_time.astimezone(prague_tz)
             
         session = self.get_active_session(current_time)
         symbol = self.get_active_symbol(current_time)
